@@ -8,11 +8,11 @@ Regra: concluir a fase, marcar os checkboxes, commitar, parar e reportar. Só av
 
 ## Fase 0 — Spike de viabilidade (Windows)
 Objetivo: descobrir o que o Windows realmente nos entrega, antes de construir qualquer coisa.
-- [ ] Script `scripts/spike_media.py` que lista todas as sessões GSMTC (app, título, artista, status, posição, duração) e permite play/pause/next/previous/seek por sessão
-- [ ] Testar com: YouTube em 2 abas do Chrome, VLC, Spotify
-- [ ] Script `scripts/spike_volume.py` que lista sessões de áudio por app e altera o volume de cada uma e o volume mestre
-- [ ] Preencher os checkboxes da seção "Hipóteses a validar" em `ARQUITETURA.md` com o resultado real
-- [ ] Relatório curto em `ARQUITETURA.md` (seção Decisões): o que funciona, o que não funciona, impacto no plano
+- [x] Script `scripts/spike_media.py` que lista todas as sessões GSMTC (app, título, artista, status, posição, duração) e permite play/pause/next/previous/seek por sessão
+- [ ] Testar com: YouTube em 2 abas do Chrome, VLC, Spotify *(Spotify e VLC 3.0.23 testados; Chrome padrão observado com 2 sessões GSMTC simultâneas por aba, restando confirmar interativamente `seek`/`pause` em 2 abas de YouTube abertas pelo usuário e mDNS no Android)*
+- [x] Script `scripts/spike_volume.py` que lista sessões de áudio por app e altera o volume de cada uma e o volume mestre
+- [x] Preencher os checkboxes da seção "Hipóteses a validar" em `ARQUITETURA.md` com o resultado real
+- [x] Relatório curto em `ARQUITETURA.md` (seção Decisões): o que funciona, o que não funciona, impacto no plano
 
 **Aceite:** hipóteses respondidas com evidência; usuário decide se o plano muda.
 
