@@ -14,6 +14,11 @@ export function formatTime(seconds: number): string {
   return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
 }
 
+export function cleanMediaTitle(rawTitle: string | null | undefined): string {
+  if (!rawTitle) return "";
+  return rawTitle.replace(/^\(\d+\+?\)\s*/, "").trim();
+}
+
 export function safeArtworkUrl(raw: string | null | undefined): string | null {
   if (!raw) return null;
   try {

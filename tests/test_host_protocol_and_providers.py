@@ -20,7 +20,9 @@ from host.protocol import (
     PingMessage,
     SelectMessage,
     VolumeMessage,
+    normalize_media_title,
     parse_client_message,
+    session_to_payload,
 )
 from host.providers.base import (
     AudioAppInfo,
@@ -262,6 +264,31 @@ def test_protocol_v1_validation() -> None:
         parse_client_message({"v": 1, "type": "open", "mode": "url", "url": "javascript:alert(1)"})
     with pytest.raises(ValidationError):
         parse_client_message({"v": 1, "type": "open", "mode": "url", "url": "chrome://extensions"})
+
+
+def test_normalize_media_title_strips_notification_counts() -> None:
+    assert normalize_media_title("(2509) Never Gonna Give You Up") == "Never Gonna Give You Up"
+    assert normalize_media_title("(1) Lo-fi Hip Hop Radio") == "Lo-fi Hip Hop Radio"
+    assert normalize_media_title("(99+) Ao Vivo") == "Ao Vivo"
+    assert normalize_media_title("Normal Title") == "Normal Title"
+    assert normalize_media_title("") == ""
+    assert normalize_media_title(None) == ""
+
+    # Verify session_to_payload strips notification prefix in Protocol v1 payload
+    raw = MediaSessionInfo(
+        id="chrome:99",
+        source="chrome",
+        app="Google Chrome",
+        app_id="chrome.exe",
+        title="(2509) Never Gonna Give You Up",
+        artist="Rick Astley",
+        status="PLAYING",
+        position=10.0,
+        duration=200.0,
+        controls=PlaybackControls(play=True, pause=True, toggle=True),
+    )
+    payload = session_to_payload(raw)
+    assert payload.title == "Never Gonna Give You Up"
 
 
 def test_windows_helper_functions() -> None:

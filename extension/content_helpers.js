@@ -69,11 +69,17 @@
     return bestSrc;
   }
 
+  function cleanMediaTitle(rawTitle) {
+    if (!rawTitle || typeof rawTitle !== "string") return "";
+    return rawTitle.replace(/^\(\d+\+?\)\s*/, "").trim();
+  }
+
   function normalizeMediaMetadata(metadata) {
     if (!metadata || typeof metadata !== "object") {
       return { title: "", artist: "", album: "", artworkUrl: null, hasData: false };
     }
-    const title = typeof metadata.title === "string" ? metadata.title.trim() : "";
+    const rawTitle = typeof metadata.title === "string" ? metadata.title.trim() : "";
+    const title = cleanMediaTitle(rawTitle);
     const artist = typeof metadata.artist === "string" ? metadata.artist.trim() : "";
     const album = typeof metadata.album === "string" ? metadata.album.trim() : "";
     const artworkUrl =
@@ -198,6 +204,7 @@
     extractYoutubeVideoId,
     isYoutubeHost,
     youtubeThumbnailUrl,
+    cleanMediaTitle,
     pickBestArtwork,
     normalizeMediaMetadata,
     mergeMediaMetadata,

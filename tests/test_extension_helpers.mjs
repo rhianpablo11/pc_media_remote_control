@@ -231,3 +231,22 @@ test("service worker keepalive interval and tab merge sorting behave as expected
     [10, 20]
   );
 });
+
+test("cleanMediaTitle strips notification prefixes from YouTube and browser titles", () => {
+  assert.equal(
+    contentHelpers.cleanMediaTitle("(2509) Título do Vídeo no YouTube"),
+    "Título do Vídeo no YouTube"
+  );
+  assert.equal(contentHelpers.cleanMediaTitle("(1) Canal"), "Canal");
+  assert.equal(contentHelpers.cleanMediaTitle("(99+) Ao vivo"), "Ao vivo");
+  assert.equal(contentHelpers.cleanMediaTitle("Vídeo Sem Notificação"), "Vídeo Sem Notificação");
+  assert.equal(contentHelpers.cleanMediaTitle(""), "");
+
+  const merged = contentHelpers.mergeMediaMetadata({
+    isolatedMeta: null,
+    mainMeta: null,
+    domMeta: { title: "(42) Música em Reprodução", artist: "Artista" },
+    isYouTube: true,
+  });
+  assert.equal(merged.title, "Música em Reprodução");
+});

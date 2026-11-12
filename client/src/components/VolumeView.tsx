@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { AudioSession, MasterVolume, MediaSession } from "../types";
-import { triggerHaptic } from "../utils";
+import { cleanMediaTitle, triggerHaptic } from "../utils";
 import { VolumeIcon, VolumeMutedIcon } from "./Icons";
 
 interface VolumeViewProps {
@@ -9,6 +9,30 @@ interface VolumeViewProps {
   audioSessions: AudioSession[];
   onVolume: (target: string, opts: { value?: number; muted?: boolean }) => void;
 }
+
+const IRRELEVANT_SYSTEM_NAMES = new Set([
+  "systemsounds",
+  "sons do sistema",
+  "windowsterminal.exe",
+  "windowsterminal",
+  "terminal",
+  "powershell.exe",
+  "powershell",
+  "cmd.exe",
+  "cmd",
+  "conhost.exe",
+  "conhost",
+  "openconsole.exe",
+  "openconsole",
+  "bash.exe",
+  "wsl.exe",
+]);
+
+const CHROME_PROCESS_NAMES = new Set([
+  "chrome.exe",
+  "chrome",
+  "google chrome",
+]);
 
 export function VolumeView({
   masterVolume,
@@ -32,12 +56,37 @@ export function VolumeView({
     });
   };
 
+  const filteredAudioSessions = useMemo(() => {
+    return audioSessions.filter((app) => {
+      // 1. Ocultar apps sem sessão de áudio ativa
+      if (!app.active) return false;
+
+      // 2. Ocultar entradas de sistema irrelevantes (Sons do Sistema, terminal, etc.)
+      const proc = app.processName.toLowerCase();
+      const name = app.app.toLowerCase();
+      if (IRRELEVANT_SYSTEM_NAMES.has(proc) || IRRELEVANT_SYSTEM_NAMES.has(name)) {
+        return false;
+      }
+
+      // 3. Evitar que Chrome apareça duplicado como 'aba' e como 'app'
+      if (
+        chromeSessions.length > 0 &&
+        (CHROME_PROCESS_NAMES.has(proc) || CHROME_PROCESS_NAMES.has(name))
+      ) {
+        return false;
+      }
+
+      return true;
+    });
+  }, [audioSessions, chromeSessions.length]);
+
   const masterVal = draftValues.master ?? masterVolume?.level ?? 0.5;
   const masterMuted = masterVolume?.muted ?? false;
 
   return (
     <div className="flex flex-col gap-4">
-      <section className="card-surface p-5">
+      {/* Master Volume */}
+      <section className="card-surface p-5 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
         <div className="mb-2 flex items-center justify-between gap-2">
           <div className="min-w-0">
             <h2 className="text-base font-semibold" style={{ color: "var(--text)" }}>
@@ -92,7 +141,8 @@ export function VolumeView({
         </div>
       </section>
 
-      <section className="card-surface p-5">
+      {/* Chrome Tabs Volume */}
+      <section className="card-surface p-5 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
         <h2 className="mb-3 text-base font-semibold" style={{ color: "var(--text)" }}>
           Abas do Chrome
         </h2>
@@ -101,16 +151,20 @@ export function VolumeView({
             Nenhuma aba com mídia conectada pela extensão.
           </p>
         ) : (
-          <div className="divide-y" style={{ borderColor: "var(--separator)" }}>
-            {chromeSessions.map((tab) => {
+          <div className="space-y-4">
+            {chromeSessions.map((tab, idx) => {
               const current = draftValues[tab.id] ?? tab.volume ?? 1;
               const isMuted = Boolean(tab.muted);
+              const title = cleanMediaTitle(tab.title);
               return (
-                <div key={tab.id} className="py-3 first:pt-0 last:pb-0">
+                <div
+                  key={tab.id}
+                  className={idx > 0 ? "pt-4 border-t border-[var(--separator)]/40" : ""}
+                >
                   <div className="mb-1 flex items-center justify-between gap-2">
                     <div className="min-w-0">
                       <p className="truncate text-sm font-semibold" style={{ color: "var(--text)" }}>
-                        {tab.title || "Aba sem título"}
+                        {title || "Aba sem título"}
                       </p>
                       <p className="truncate text-xs" style={{ color: "var(--text-secondary)" }}>
                         {tab.artist || "Google Chrome"}
@@ -126,7 +180,7 @@ export function VolumeView({
                   <div className="flex items-center gap-3">
                     <button
                       type="button"
-                      aria-label={isMuted ? `Ativar som de ${tab.title}` : `Silenciar aba ${tab.title}`}
+                      aria-label={isMuted ? `Ativar som de ${title}` : `Silenciar aba ${title}`}
                       onClick={() => {
                         triggerHaptic(8);
                         onVolume(tab.id, { muted: !isMuted });
@@ -145,7 +199,7 @@ export function VolumeView({
                     </button>
                     <input
                       type="range"
-                      aria-label={`Volume da aba ${tab.title}`}
+                      aria-label={`Volume da aba ${title}`}
                       className="media-slider"
                       min={0}
                       max={1}
@@ -164,28 +218,30 @@ export function VolumeView({
         )}
       </section>
 
-      <section className="card-surface p-5">
+      {/* Windows Native Apps Volume (Filtered: only active, no system spam, no duplicate Chrome) */}
+      <section className="card-surface p-5 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
         <h2 className="mb-3 text-base font-semibold" style={{ color: "var(--text)" }}>
           Aplicativos (Windows)
         </h2>
-        {audioSessions.length === 0 ? (
+        {filteredAudioSessions.length === 0 ? (
           <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
-            Nenhum aplicativo com mixer de áudio ativo no momento.
+            Nenhum outro aplicativo com áudio ativo no momento.
           </p>
         ) : (
-          <div className="divide-y" style={{ borderColor: "var(--separator)" }}>
-            {audioSessions.map((app) => {
+          <div className="space-y-4">
+            {filteredAudioSessions.map((app, idx) => {
               const current = draftValues[app.id] ?? app.volume;
               return (
-                <div key={app.id} className="py-3 first:pt-0 last:pb-0">
+                <div
+                  key={app.id}
+                  className={idx > 0 ? "pt-4 border-t border-[var(--separator)]/40" : ""}
+                >
                   <div className="mb-1 flex items-center justify-between gap-2">
                     <div className="min-w-0 flex items-center gap-2">
-                      {app.active ? (
-                        <span
-                          className="h-2 w-2 shrink-0 rounded-full"
-                          style={{ backgroundColor: "var(--ok)" }}
-                        />
-                      ) : null}
+                      <span
+                        className="h-2 w-2 shrink-0 rounded-full"
+                        style={{ backgroundColor: "var(--ok)" }}
+                      />
                       <div className="min-w-0">
                         <p className="truncate text-sm font-semibold" style={{ color: "var(--text)" }}>
                           {app.app}

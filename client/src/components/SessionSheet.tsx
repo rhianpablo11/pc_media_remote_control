@@ -1,6 +1,6 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import type { MediaSession } from "../types";
-import { safeArtworkUrl } from "../utils";
+import { cleanMediaTitle, safeArtworkUrl } from "../utils";
 import { CheckIcon, CloseIcon, MusicNoteIcon } from "./Icons";
 
 interface SessionSheetProps {
@@ -28,6 +28,17 @@ export function SessionSheet({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [open, onClose]);
+
+  const sortedSessions = useMemo(() => {
+    return [...sessions].sort((a, b) => {
+      const aPlaying = a.status === "PLAYING" ? 1 : 0;
+      const bPlaying = b.status === "PLAYING" ? 1 : 0;
+      if (aPlaying !== bPlaying) return bPlaying - aPlaying;
+      if (a.id === activeSessionId) return -1;
+      if (b.id === activeSessionId) return 1;
+      return 0;
+    });
+  }, [sessions, activeSessionId]);
 
   if (!open) return null;
 
@@ -71,14 +82,19 @@ export function SessionSheet({
         </div>
 
         <div className="max-h-[56dvh] space-y-2.5 overflow-y-auto pr-0.5">
-          {sessions.length === 0 ? (
+          {sortedSessions.length === 0 ? (
             <p className="py-6 text-center text-sm" style={{ color: "var(--text-secondary)" }}>
               Nenhuma sessão ativa detectada no momento.
             </p>
           ) : (
-            sessions.map((s) => {
+            sortedSessions.map((s) => {
               const selected = s.id === activeSessionId;
+              const isPlaying = s.status === "PLAYING";
               const thumb = safeArtworkUrl(s.artworkUrl);
+              const title = cleanMediaTitle(s.title);
+              const appLabel = s.source === "chrome" ? "Chrome" : s.app.replace(/\.exe$/i, "");
+              const channelSubtitle = s.artist || s.album || "Sem canal";
+
               return (
                 <button
                   key={s.id}
@@ -87,7 +103,7 @@ export function SessionSheet({
                     onSelect(s.id);
                     onClose();
                   }}
-                  className="touch-btn flex w-full items-center gap-3 rounded-2xl p-3 text-left"
+                  className="touch-btn flex w-full items-center gap-3 rounded-2xl p-3 text-left transition-all"
                   style={{
                     backgroundColor: selected ? "var(--accent-soft)" : "var(--surface-elevated)",
                     border: selected ? "1px solid var(--accent)" : "1px solid transparent",
@@ -112,26 +128,44 @@ export function SessionSheet({
                   )}
 
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span
-                        className="text-[11px] font-semibold uppercase tracking-wide"
-                        style={{ color: selected ? "var(--accent)" : "var(--text-secondary)" }}
+                    <div className="flex items-center justify-between gap-1">
+                      <p
+                        className="truncate text-sm font-semibold leading-tight"
+                        style={{ color: "var(--text)" }}
                       >
-                        {s.source === "chrome" ? "Chrome" : s.app}
-                      </span>
-                      {s.status === "PLAYING" ? (
+                        {title || "Sem título"}
+                      </p>
+                      {isPlaying ? (
+                        <div
+                          className="flex h-3.5 w-3.5 shrink-0 items-end justify-center gap-[2px] pb-0.5"
+                          title="Tocando agora"
+                        >
+                          <span
+                            className="w-[2.5px] h-3 rounded-full animate-eq-1"
+                            style={{ backgroundColor: "var(--ok)" }}
+                          />
+                          <span
+                            className="w-[2.5px] h-3 rounded-full animate-eq-2"
+                            style={{ backgroundColor: "var(--ok)" }}
+                          />
+                          <span
+                            className="w-[2.5px] h-3 rounded-full animate-eq-3"
+                            style={{ backgroundColor: "var(--ok)" }}
+                          />
+                        </div>
+                      ) : (
                         <span
-                          className="h-2 w-2 rounded-full"
-                          style={{ backgroundColor: "var(--ok)" }}
-                          title="Tocando"
-                        />
-                      ) : null}
+                          className="shrink-0 text-[11px] font-medium"
+                          style={{ color: "var(--text-secondary)" }}
+                        >
+                          Pausado
+                        </span>
+                      )}
                     </div>
-                    <p className="truncate text-sm font-semibold" style={{ color: "var(--text)" }}>
-                      {s.title || "Sem título"}
-                    </p>
-                    <p className="truncate text-xs" style={{ color: "var(--text-secondary)" }}>
-                      {s.artist || s.app}
+
+                    <p className="mt-0.5 truncate text-xs" style={{ color: "var(--text-secondary)" }}>
+                      <span>{channelSubtitle}</span>
+                      <span className="opacity-60 font-normal"> • {appLabel}</span>
                     </p>
                   </div>
 

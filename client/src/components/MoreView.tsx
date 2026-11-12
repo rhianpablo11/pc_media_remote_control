@@ -48,31 +48,32 @@ export function MoreView({
     }
   };
 
+  const statusLabel =
+    connectionStatus === "connected"
+      ? extensionConnected
+        ? "Conectado (Host + Extensão)"
+        : "Conectado (Extensão offline)"
+      : connectionStatus === "connecting"
+        ? "Conectando..."
+        : connectionStatus === "reconnecting"
+          ? "Reconectando..."
+          : "Não pareado";
+
   return (
     <div className="flex flex-col gap-4">
-      <section className="card-surface p-5">
-        <div className="mb-3 flex items-center justify-between gap-2">
-          <h2 className="text-base font-semibold" style={{ color: "var(--text)" }}>
-            Abrir no Chrome
-          </h2>
-          <span
-            className="rounded-full px-2.5 py-0.5 text-[11px] font-semibold"
-            style={{
-              backgroundColor: "var(--surface-elevated)",
-              color: extensionConnected ? "var(--ok)" : "var(--text-secondary)",
-            }}
-          >
-            {extensionConnected ? "Extensão conectada" : "Extensão offline"}
-          </span>
-        </div>
+      {/* 1. Abrir no Chrome */}
+      <section className="card-surface p-5 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
+        <h2 className="mb-3 text-base font-semibold" style={{ color: "var(--text)" }}>
+          Abrir no Chrome
+        </h2>
 
         <form onSubmit={submitYoutube} className="mb-3 flex gap-2">
           <input
             type="search"
             value={ytQuery}
             onChange={(e) => setYtQuery(e.target.value)}
-            placeholder="Buscar vídeo no YouTube..."
-            aria-label="Buscar vídeo no YouTube"
+            placeholder="Buscar no YouTube"
+            aria-label="Buscar no YouTube"
             disabled={!extensionConnected}
             className="min-h-[44px] min-w-0 flex-1 rounded-2xl px-3.5 text-sm outline-none disabled:opacity-50"
             style={{
@@ -99,8 +100,8 @@ export function MoreView({
             type="url"
             value={openUrl}
             onChange={(e) => setOpenUrl(e.target.value)}
-            placeholder="https://www.youtube.com/watch?v=..."
-            aria-label="Abrir URL em nova aba"
+            placeholder="Colar link"
+            aria-label="Colar link"
             disabled={!extensionConnected}
             className="min-h-[44px] min-w-0 flex-1 rounded-2xl px-3.5 text-sm outline-none disabled:opacity-50"
             style={{
@@ -124,7 +125,8 @@ export function MoreView({
         </form>
       </section>
 
-      <section className="card-surface p-5">
+      {/* 2. Teclas globais de mídia (Fallback VLC / players sem GSMTC) */}
+      <section className="card-surface p-5 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
         <h2 className="text-base font-semibold" style={{ color: "var(--text)" }}>
           Teclas globais de mídia
         </h2>
@@ -173,7 +175,31 @@ export function MoreView({
         </div>
       </section>
 
-      <section className="card-surface p-5">
+      {/* 3. Conexão com o PC (Status de conexão exibido uma única vez com botão Reconectar) */}
+      <section className="card-surface flex items-center justify-between gap-3 p-5 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold" style={{ color: "var(--text)" }}>
+            Conexão com o PC
+          </h2>
+          <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
+            {statusLabel}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onReconnect}
+          className="touch-btn shrink-0 rounded-2xl px-4 text-xs font-semibold"
+          style={{
+            backgroundColor: "var(--surface-elevated)",
+            color: "var(--accent)",
+          }}
+        >
+          Reconectar
+        </button>
+      </section>
+
+      {/* 4. Aparência (Seletor de tema no fim) */}
+      <section className="card-surface p-5 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
         <h2 className="mb-3 text-base font-semibold" style={{ color: "var(--text)" }}>
           Aparência
         </h2>
@@ -204,28 +230,6 @@ export function MoreView({
             );
           })}
         </div>
-      </section>
-
-      <section className="card-surface flex items-center justify-between gap-3 p-5">
-        <div className="min-w-0">
-          <h2 className="text-base font-semibold" style={{ color: "var(--text)" }}>
-            Conexão com o PC
-          </h2>
-          <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
-            Estado: {connectionStatus === "connected" ? "Conectado" : connectionStatus === "connecting" ? "Conectando..." : connectionStatus === "reconnecting" ? "Reconectando..." : "Não pareado"}
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={onReconnect}
-          className="touch-btn shrink-0 rounded-2xl px-4 text-xs font-semibold"
-          style={{
-            backgroundColor: "var(--surface-elevated)",
-            color: "var(--accent)",
-          }}
-        >
-          Reconectar
-        </button>
       </section>
     </div>
   );

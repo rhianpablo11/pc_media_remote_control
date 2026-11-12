@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
@@ -198,6 +199,17 @@ def parse_client_message(raw: object) -> ClientMessage:
     return _CLIENT_MESSAGE_ADAPTER.validate_python(raw)
 
 
+_NOTIFICATION_PREFIX_RE = re.compile(r"^\(\d+\+?\)\s*")
+
+
+def normalize_media_title(raw_title: str | None) -> str:
+    """Strip browser/notification unread badges like '(2509) ' or '(1) ' from titles."""
+    if not raw_title:
+        return ""
+    cleaned = raw_title.strip()
+    return _NOTIFICATION_PREFIX_RE.sub("", cleaned).strip()
+
+
 def session_to_payload(session: MediaSessionInfo) -> SessionPayload:
     """Convert domain MediaSessionInfo into Protocol v1 SessionPayload."""
     c: PlaybackControls = session.controls
@@ -206,7 +218,7 @@ def session_to_payload(session: MediaSessionInfo) -> SessionPayload:
         source=session.source,
         app=session.app,
         appId=session.app_id,
-        title=session.title,
+        title=normalize_media_title(session.title),
         artist=session.artist,
         album=session.album,
         artworkUrl=session.artwork_url,

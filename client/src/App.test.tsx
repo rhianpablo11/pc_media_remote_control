@@ -2,7 +2,12 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { StateMessage } from "./types";
-import { extrapolatePosition, formatTime, safeArtworkUrl } from "./utils";
+import {
+  cleanMediaTitle,
+  extrapolatePosition,
+  formatTime,
+  safeArtworkUrl,
+} from "./utils";
 
 class MockWebSocket {
   static CONNECTING = 0;
@@ -69,6 +74,46 @@ function makeSampleState(overrides?: Partial<StateMessage>): StateMessage {
         volume: 0.75,
         muted: false,
       },
+      {
+        id: "windows-audio:SystemSounds",
+        source: "windows",
+        app: "Sons do Sistema",
+        processName: "SystemSounds",
+        pid: 0,
+        active: true,
+        volume: 0.5,
+        muted: false,
+      },
+      {
+        id: "windows-audio:windowsterminal.exe",
+        source: "windows",
+        app: "Windows Terminal",
+        processName: "windowsterminal.exe",
+        pid: 300,
+        active: true,
+        volume: 0.5,
+        muted: false,
+      },
+      {
+        id: "windows-audio:chrome.exe",
+        source: "windows",
+        app: "Google Chrome",
+        processName: "chrome.exe",
+        pid: 400,
+        active: true,
+        volume: 0.9,
+        muted: false,
+      },
+      {
+        id: "windows-audio:vlc.exe",
+        source: "windows",
+        app: "VLC media player",
+        processName: "vlc.exe",
+        pid: 500,
+        active: false,
+        volume: 0.5,
+        muted: false,
+      },
     ],
     sessions: [
       {
@@ -76,7 +121,7 @@ function makeSampleState(overrides?: Partial<StateMessage>): StateMessage {
         source: "chrome",
         app: "YouTube",
         appId: "chrome.exe",
-        title: "Lo-fi Hip Hop Radio",
+        title: "(2509) Lo-fi Hip Hop Radio",
         artist: "Lofi Girl",
         album: "",
         artworkUrl: "https://i.ytimg.com/vi/abc123/hqdefault.jpg",
@@ -127,6 +172,14 @@ function makeSampleState(overrides?: Partial<StateMessage>): StateMessage {
 }
 
 describe("utils", () => {
+  it("normalizes media titles by stripping browser notification counts", () => {
+    expect(cleanMediaTitle("(2509) Never Gonna Give You Up")).toBe("Never Gonna Give You Up");
+    expect(cleanMediaTitle("(1) YouTube Video")).toBe("YouTube Video");
+    expect(cleanMediaTitle("(99+) Lofi Hip Hop")).toBe("Lofi Hip Hop");
+    expect(cleanMediaTitle("Normal Track Title")).toBe("Normal Track Title");
+    expect(cleanMediaTitle("")).toBe("");
+  });
+
   it("extrapolates playing position and clamps to duration", () => {
     expect(
       extrapolatePosition({
@@ -182,15 +235,16 @@ describe("App PWA", () => {
     vi.unstubAllGlobals();
   });
 
-  it("loads cached state first, transitions to live state, extrapolates time, and sends commands", () => {
+  it("loads cached state first, transitions to live state, normalizes title, and sends commands", () => {
     const cached = makeSampleState({
-      sessions: [{ ...makeSampleState().sessions[0], title: "Sessão em Cache" }],
+      sessions: [{ ...makeSampleState().sessions[0], title: "(12) Sessão em Cache" }],
     });
     localStorage.setItem("pcmedia_last_state_v1", JSON.stringify(cached));
 
     render(<App />);
 
     expect(screen.getByText("Conectando (cache)")).toBeInTheDocument();
+    // Notification count "(12) " was cleaned
     expect(screen.getByText("Sessão em Cache")).toBeInTheDocument();
 
     const ws = MockWebSocket.instances[0];
@@ -202,6 +256,7 @@ describe("App PWA", () => {
     });
 
     expect(screen.getByText("Conectado")).toBeInTheDocument();
+    // Notification count "(2509) " was cleaned from title
     expect(screen.getByText("Lo-fi Hip Hop Radio")).toBeInTheDocument();
     expect(screen.getByText("00:30")).toBeInTheDocument();
 
@@ -240,7 +295,7 @@ describe("App PWA", () => {
     });
   });
 
-  it("handles empty state, session switching, reconnect, pairing_required, and error banner", () => {
+  it("handles empty state, session switching with state indicators, reconnect, and pairing_required", () => {
     render(<App />);
     const ws = MockWebSocket.instances[0];
 
@@ -256,6 +311,11 @@ describe("App PWA", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Selecionar sessão de mídia" }));
     expect(screen.getByRole("dialog", { name: "Sessões de mídia disponíveis" })).toBeInTheDocument();
+
+    // Equalizer for playing and "Pausado" for paused session
+    expect(screen.getByTitle("Tocando agora")).toBeInTheDocument();
+    expect(screen.getByText("Pausado")).toBeInTheDocument();
+
     fireEvent.click(screen.getByText("Faixa Salva"));
 
     const selectMsg = JSON.parse(ws.sent.at(-1)!);
@@ -291,7 +351,7 @@ describe("App PWA", () => {
     expect(screen.getByText("Dispositivo não pareado")).toBeInTheDocument();
   });
 
-  it("supports Volume controls and More tab (YouTube search, URL open, themes)", () => {
+  it("filters inactive and system apps in Volume view and supports More tab", () => {
     render(<App />);
     const ws = MockWebSocket.instances[0];
 
@@ -302,10 +362,24 @@ describe("App PWA", () => {
 
     // Switch to Volume tab
     fireEvent.click(screen.getByRole("button", { name: "Volume" }));
+
+    // Chrome tab volume is present
     fireEvent.click(screen.getByRole("button", { name: /Silenciar aba Lo-fi Hip Hop Radio/i }));
+
+    // Active non-system app (Spotify) is present
+    expect(screen.getByText("Spotify")).toBeInTheDocument();
     fireEvent.change(screen.getByRole("slider", { name: /Volume de Spotify/i }), {
       target: { value: "0.35" },
     });
+
+    // Inactive app (VLC), system sounds, terminal, and duplicate Chrome are filtered out
+    expect(screen.queryByText("Sons do Sistema")).not.toBeInTheDocument();
+    expect(screen.queryByText("Windows Terminal")).not.toBeInTheDocument();
+    expect(screen.queryByText("VLC media player")).not.toBeInTheDocument();
+    // "Google Chrome" is NOT rendered as an app because Chrome tabs are present
+    const headings = screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent);
+    expect(headings).toContain("Abas do Chrome");
+    expect(headings).toContain("Aplicativos (Windows)");
 
     const volMsgs = ws.sent.map((s) => JSON.parse(s));
     expect(volMsgs[0]).toMatchObject({ v: 1, type: "volume", target: "chrome:11", muted: true });
@@ -318,16 +392,22 @@ describe("App PWA", () => {
 
     // Switch to Mais tab
     fireEvent.click(screen.getByRole("button", { name: "Mais" }));
-    fireEvent.change(screen.getByLabelText("Buscar vídeo no YouTube"), {
+
+    // Shortened placeholders
+    fireEvent.change(screen.getByPlaceholderText("Buscar no YouTube"), {
       target: { value: "synthwave live" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Buscar" }));
 
-    fireEvent.change(screen.getByLabelText("Abrir URL em nova aba"), {
+    fireEvent.change(screen.getByPlaceholderText("Colar link"), {
       target: { value: "https://youtube.com/watch?v=123" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Abrir" }));
 
+    // Single connection status card
+    expect(screen.getByText("Conectado (Host + Extensão)")).toBeInTheDocument();
+
+    // Theme switcher at the end
     fireEvent.click(screen.getByRole("radio", { name: "Escuro" }));
     expect(document.documentElement.dataset.theme).toBe("dark");
     fireEvent.click(screen.getByRole("radio", { name: "Claro" }));

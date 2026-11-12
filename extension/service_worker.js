@@ -117,7 +117,13 @@ async function ensureContentScriptsAndPollTab(tab) {
     return;
   }
   try {
-    await chrome.tabs.sendMessage(tab.id, { type: "request_media_state" });
+    const resp = await chrome.tabs.sendMessage(tab.id, { type: "request_media_state" });
+    if (resp && resp.snapshot) {
+      const entry = mergeTabEntry(tab.id, resp.snapshot, tab);
+      if (entry) {
+        tabStates.set(tab.id, entry);
+      }
+    }
     return;
   } catch {
     // Tab was probably already open before the extension started; inject now.
@@ -134,6 +140,13 @@ async function ensureContentScriptsAndPollTab(tab) {
       files: ["content_helpers.js", "content.js"],
       world: "ISOLATED",
     });
+    const resp = await chrome.tabs.sendMessage(tab.id, { type: "request_media_state" });
+    if (resp && resp.snapshot) {
+      const entry = mergeTabEntry(tab.id, resp.snapshot, tab);
+      if (entry) {
+        tabStates.set(tab.id, entry);
+      }
+    }
   } catch {
     // Protected or closed tab; ignore safely
   }

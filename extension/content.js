@@ -230,8 +230,9 @@
 
     const poster =
       mediaEl && mediaEl.tagName === "VIDEO" && mediaEl.poster ? mediaEl.poster : null;
-    const title =
+    const rawTitle =
       queryMetaContent('meta[property="og:title"]') || (document.title || "").trim();
+    const title = helpers.cleanMediaTitle(rawTitle);
     const artist =
       queryMetaContent('meta[name="author"]') ||
       queryMetaContent('meta[property="og:site_name"]') ||
@@ -292,7 +293,7 @@
     return {
       hasMedia: true,
       url: window.location.href,
-      title: merged.title || (document.title || "").trim() || window.location.hostname,
+      title: merged.title || helpers.cleanMediaTitle(document.title || "") || window.location.hostname,
       artist: merged.artist || "",
       album: merged.album || "",
       artworkUrl: merged.artworkUrl || null,
@@ -526,8 +527,9 @@
           window.location.origin
         );
       }
+      const snapshot = buildMediaSnapshot();
       sendSnapshot(true);
-      sendResponse({ ok: true });
+      sendResponse({ ok: true, snapshot });
       return false;
     }
 

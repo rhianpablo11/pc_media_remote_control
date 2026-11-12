@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 import type { MasterVolume, MediaAction, MediaSession } from "../types";
-import { extrapolatePosition, formatTime, safeArtworkUrl, triggerHaptic } from "../utils";
+import {
+  cleanMediaTitle,
+  extrapolatePosition,
+  formatTime,
+  safeArtworkUrl,
+  triggerHaptic,
+} from "../utils";
 import {
   FastForwardAdIcon,
   Forward10Icon,
@@ -83,6 +89,14 @@ export function NowPlayingView({
   const masterPct = Math.round(masterLevel * 100);
   const masterMuted = masterVolume?.muted ?? false;
 
+  const originName = session
+    ? session.source === "chrome"
+      ? "Chrome"
+      : session.app.replace(/\.exe$/i, "")
+    : "Central";
+
+  const cleanTitle = cleanMediaTitle(session?.title);
+
   const commitSeek = (nextPos: number) => {
     if (!session) return;
     setDragPos(null);
@@ -91,17 +105,17 @@ export function NowPlayingView({
 
   return (
     <div className="flex flex-col gap-4">
-      <section className="card-surface p-5">
+      <section className="card-surface p-5 sm:p-6 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
         <div className="mb-4 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
             <span
-              className="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold truncate"
+              className="inline-flex shrink-0 items-center rounded-full px-3 py-1 text-xs font-semibold whitespace-nowrap"
               style={{
                 backgroundColor: "var(--surface-elevated)",
                 color: "var(--text)",
               }}
             >
-              {session ? session.app : "Central de Mídia"}
+              {originName}
             </span>
             {session ? (
               <span
@@ -117,7 +131,7 @@ export function NowPlayingView({
             type="button"
             onClick={onOpenSessions}
             aria-label="Selecionar sessão de mídia"
-            className="touch-btn inline-flex items-center gap-1.5 rounded-full px-3.5 text-xs font-semibold"
+            className="touch-btn inline-flex items-center gap-1.5 rounded-full px-3.5 text-xs font-semibold shrink-0"
             style={{
               backgroundColor: "var(--accent-soft)",
               color: "var(--accent)",
@@ -129,69 +143,70 @@ export function NowPlayingView({
         </div>
 
         {!session ? (
-          <div className="flex flex-col items-center py-8 text-center">
+          <div className="flex flex-col items-center py-12 text-center">
             <div
-              className="mb-4 flex h-20 w-20 items-center justify-center rounded-[22px]"
+              className="mb-4 flex h-24 w-24 items-center justify-center rounded-[24px]"
               style={{
                 backgroundColor: "var(--surface-elevated)",
                 color: "var(--text-secondary)",
               }}
             >
-              <MusicNoteIcon className="h-9 w-9" />
+              <MusicNoteIcon className="h-10 w-10" />
             </div>
             <h2 className="text-lg font-semibold" style={{ color: "var(--text)" }}>
               {isLoadingInitial ? "Conectando ao PC..." : "Nenhuma mídia tocando"}
             </h2>
-            <p className="mt-1.5 max-w-[26ch] text-sm" style={{ color: "var(--text-secondary)" }}>
+            <p className="mt-1.5 max-w-[28ch] text-sm" style={{ color: "var(--text-secondary)" }}>
               {isLoadingInitial
                 ? "Buscando sessões ativas no notebook."
                 : "Inicie YouTube, Spotify ou outro player no notebook para controlar por aqui."}
             </p>
           </div>
         ) : (
-          <div>
-            <div className="flex items-center gap-4">
+          <div className="flex flex-col">
+            {/* Featured Wide Artwork */}
+            <div
+              className="relative mx-auto w-full aspect-square max-h-[300px] overflow-hidden rounded-[24px] shadow-[0_10px_28px_rgba(0,0,0,0.14)]"
+              style={{
+                backgroundColor: "var(--surface-elevated)",
+                border: "1px solid var(--separator)",
+              }}
+            >
               {artwork ? (
                 <img
                   src={artwork}
-                  alt={session.title || "Capa da mídia"}
-                  className="h-20 w-20 shrink-0 rounded-[18px] object-cover"
-                  style={{
-                    backgroundColor: "var(--surface-elevated)",
-                    border: "1px solid var(--separator)",
-                  }}
+                  alt={cleanTitle || "Capa da mídia"}
+                  className="h-full w-full object-cover"
                 />
               ) : (
                 <div
-                  className="flex h-20 w-20 shrink-0 items-center justify-center rounded-[18px]"
-                  style={{
-                    backgroundColor: "var(--surface-elevated)",
-                    color: "var(--text-secondary)",
-                  }}
-                >
-                  <MusicNoteIcon className="h-8 w-8" />
-                </div>
-              )}
-
-              <div className="min-w-0 flex-1">
-                <h2
-                  className="line-clamp-2 text-[19px] font-semibold leading-snug"
-                  style={{ color: "var(--text)" }}
-                >
-                  {session.title || "Sem título"}
-                </h2>
-                <p
-                  className="mt-1 truncate text-sm"
+                  className="flex h-full w-full items-center justify-center"
                   style={{ color: "var(--text-secondary)" }}
                 >
-                  {[session.artist, session.album].filter(Boolean).join(" • ") ||
-                    (session.source === "chrome" ? "Aba do Chrome" : session.app)}
-                </p>
-              </div>
+                  <MusicNoteIcon className="h-16 w-16 opacity-75" />
+                </div>
+              )}
+            </div>
+
+            {/* Title & Artist/Channel */}
+            <div className="mt-5 text-left">
+              <h2
+                className="line-clamp-2 text-[21px] font-bold leading-snug tracking-tight"
+                style={{ color: "var(--text)" }}
+              >
+                {cleanTitle || "Sem título"}
+              </h2>
+              <p
+                className="mt-1 truncate text-[15px] font-medium"
+                style={{ color: "var(--text-secondary)" }}
+              >
+                {[session.artist, session.album].filter(Boolean).join(" • ") ||
+                  (session.source === "chrome" ? "Aba do Chrome" : originName)}
+              </p>
             </div>
 
             {session.controls.skipAd ? (
-              <div className="mt-4">
+              <div className="mt-3">
                 <button
                   type="button"
                   onClick={() => onCommand(session.id, "skip_ad")}
@@ -208,7 +223,8 @@ export function NowPlayingView({
               </div>
             ) : null}
 
-            <div className="mt-4">
+            {/* Position Slider */}
+            <div className="mt-3">
               <input
                 type="range"
                 aria-label="Posição de reprodução"
@@ -235,13 +251,14 @@ export function NowPlayingView({
               </div>
             </div>
 
-            <div className="mt-4 flex items-center justify-between gap-2">
+            {/* Playback Controls — 72px main Play/Pause + grouped secondary */}
+            <div className="mt-4 flex items-center justify-center gap-3">
               <button
                 type="button"
                 aria-label="Anterior"
                 disabled={!session.controls.previous}
                 onClick={() => onCommand(session.id, "previous")}
-                className="touch-btn flex h-12 w-12 items-center justify-center rounded-full disabled:opacity-35"
+                className="touch-btn flex h-12 w-12 items-center justify-center rounded-full disabled:opacity-30"
                 style={{
                   backgroundColor: "var(--surface-elevated)",
                   color: "var(--text)",
@@ -255,7 +272,7 @@ export function NowPlayingView({
                 aria-label="Voltar 10 segundos"
                 disabled={!session.controls.seek}
                 onClick={() => onCommand(session.id, "seek_relative", -10)}
-                className="touch-btn flex h-12 w-12 items-center justify-center rounded-full disabled:opacity-35"
+                className="touch-btn flex h-12 w-12 items-center justify-center rounded-full disabled:opacity-30"
                 style={{
                   backgroundColor: "var(--surface-elevated)",
                   color: "var(--text)",
@@ -280,16 +297,16 @@ export function NowPlayingView({
                       : "toggle";
                   onCommand(session.id, action);
                 }}
-                className="touch-btn flex h-16 w-16 items-center justify-center rounded-full shadow-sm disabled:opacity-35"
+                className="touch-btn flex h-[72px] w-[72px] items-center justify-center rounded-full shadow-[0_4px_16px_var(--accent-soft)] disabled:opacity-30"
                 style={{
                   backgroundColor: "var(--accent)",
                   color: "var(--accent-contrast)",
                 }}
               >
                 {isPlaying ? (
-                  <PauseIcon className="h-7 w-7" />
+                  <PauseIcon className="h-8 w-8" />
                 ) : (
-                  <PlayIcon className="h-7 w-7 translate-x-0.5" />
+                  <PlayIcon className="h-8 w-8 translate-x-0.5" />
                 )}
               </button>
 
@@ -298,7 +315,7 @@ export function NowPlayingView({
                 aria-label="Avançar 10 segundos"
                 disabled={!session.controls.seek}
                 onClick={() => onCommand(session.id, "seek_relative", 10)}
-                className="touch-btn flex h-12 w-12 items-center justify-center rounded-full disabled:opacity-35"
+                className="touch-btn flex h-12 w-12 items-center justify-center rounded-full disabled:opacity-30"
                 style={{
                   backgroundColor: "var(--surface-elevated)",
                   color: "var(--text)",
@@ -312,7 +329,7 @@ export function NowPlayingView({
                 aria-label="Próximo"
                 disabled={!session.controls.next}
                 onClick={() => onCommand(session.id, "next")}
-                className="touch-btn flex h-12 w-12 items-center justify-center rounded-full disabled:opacity-35"
+                className="touch-btn flex h-12 w-12 items-center justify-center rounded-full disabled:opacity-30"
                 style={{
                   backgroundColor: "var(--surface-elevated)",
                   color: "var(--text)",
@@ -325,7 +342,8 @@ export function NowPlayingView({
         )}
       </section>
 
-      <section className="card-surface px-5 py-4" aria-label="Volume geral do PC">
+      {/* Master Volume Section */}
+      <section className="card-surface px-5 py-4 shadow-[0_4px_20px_rgba(0,0,0,0.04)]" aria-label="Volume geral do PC">
         <div className="mb-1 flex items-center justify-between gap-2">
           <div className="min-w-0">
             <span className="text-sm font-semibold" style={{ color: "var(--text)" }}>
