@@ -1,0 +1,489 @@
+/**
+ * Isolated-world content script monitoring <video>/<audio> elements,
+ * navigator.mediaSession (direct probe + MAIN-world bridge), YouTube DOM,
+ * and executing per-tab playback/volume/skip-ad commands.
+ */
+(function initPcMediaContentScript() {
+  "use strict";
+
+  if (globalThis.__pcMediaControlInjected) {
+    return;
+  }
+  globalThis.__pcMediaControlInjected = true;
+
+  const helpers = globalThis.__pcMediaContentHelpers;
+  if (!helpers) {
+    return;
+  }
+
+  const MAIN_BRIDGE_SOURCE = "pc-media-control-main";
+  const ISOLATED_REQUEST_SOURCE = "pc-media-control-isolated";
+  const boundElements = new WeakSet();
+
+  let mainWorldSnapshot = { metadata: null, playbackState: "none" };
+  let lastTimeUpdateSentAt = 0;
+  let mutationTimer = null;
+  let lastSentKey = "";
+
+  function isElementVisibleAndEnabled(el) {
+    if (!el || !el.isConnected) return false;
+    if (el.disabled || el.getAttribute("aria-disabled") === "true") return false;
+    const style = window.getComputedStyle(el);
+    if (
+      style.display === "none" ||
+      style.visibility === "hidden" ||
+      style.pointerEvents === "none" ||
+      Number(style.opacity) === 0
+    ) {
+      return false;
+    }
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+
+  function findClickableSkipAdButton() {
+    for (const selector of helpers.SKIP_AD_SELECTORS) {
+      const candidates = document.querySelectorAll(selector);
+      for (const btn of candidates) {
+        if (isElementVisibleAndEnabled(btn)) {
+          return btn;
+        }
+      }
+    }
+    return null;
+  }
+
+  function findReadyYoutubeControl(selector) {
+    const el = document.querySelector(selector);
+    if (!isElementVisibleAndEnabled(el)) return null;
+    return el;
+  }
+
+  function collectMediaElements() {
+    const elements = Array.from(document.querySelectorAll("video, audio"));
+    const isYT = helpers.isYoutubeHost(window.location.hostname);
+    const wrapped = elements.map((el) => {
+      const isYoutubeMainVideo =
+        isYT &&
+        Boolean(
+          el.closest("#movie_player") ||
+            el.classList.contains("html5-main-video") ||
+            el.closest("ytd-reel-video-renderer[is-active]")
+        );
+      const isYoutubePreview = isYT && Boolean(el.closest("ytd-video-preview"));
+      return {
+        element: el,
+        isVideo: el.tagName === "VIDEO",
+        isYoutubeMainVideo,
+        isYoutubePreview,
+        currentSrc: el.currentSrc || "",
+        src: el.src || "",
+        readyState: el.readyState || 0,
+        paused: Boolean(el.paused),
+        ended: Boolean(el.ended),
+        duration: el.duration,
+        muted: Boolean(el.muted),
+        volume: typeof el.volume === "number" ? el.volume : 1,
+      };
+    });
+
+    for (const item of wrapped) {
+      attachElementListeners(item.element);
+    }
+
+    const best = helpers.selectPrimaryMediaCandidate(wrapped, isYT);
+    return best ? best.element : null;
+  }
+
+  function readIsolatedMediaSession() {
+    if (!("mediaSession" in navigator) || !navigator.mediaSession) {
+      return { metadata: null, playbackState: "none" };
+    }
+    const raw = navigator.mediaSession.metadata;
+    return {
+      metadata: raw
+        ? {
+            title: raw.title || "",
+            artist: raw.artist || "",
+            album: raw.album || "",
+            artwork: Array.isArray(raw.artwork)
+              ? raw.artwork.map((a) => ({ src: a.src || "", sizes: a.sizes || "" }))
+              : [],
+          }
+        : null,
+      playbackState: navigator.mediaSession.playbackState || "none",
+    };
+  }
+
+  function queryFirstText(selectors) {
+    for (const sel of selectors) {
+      const el = document.querySelector(sel);
+      const txt = el && el.textContent ? el.textContent.trim() : "";
+      if (txt) return txt;
+    }
+    return "";
+  }
+
+  function queryMetaContent(selector) {
+    const el = document.querySelector(selector);
+    const val = el ? el.getAttribute("content") : "";
+    return val ? val.trim() : "";
+  }
+
+  function readDomMetadata(mediaEl) {
+    const host = window.location.hostname.toLowerCase();
+    const isYT = helpers.isYoutubeHost(host);
+
+    if (isYT) {
+      const videoId = helpers.extractYoutubeVideoId(window.location.href);
+      const artworkUrl = helpers.youtubeThumbnailUrl(videoId);
+
+      if (host === "music.youtube.com") {
+        const musicImg = document.querySelector("ytmusic-player-bar img.image");
+        return {
+          title:
+            queryFirstText(["ytmusic-player-bar .title"]) ||
+            document.title.replace(/\s*-\s*YouTube Music$/i, "").trim(),
+          artist: queryFirstText(["ytmusic-player-bar .byline"]),
+          artworkUrl: (musicImg && musicImg.src) || artworkUrl,
+        };
+      }
+
+      if (window.location.pathname.startsWith("/shorts/")) {
+        return {
+          title:
+            queryFirstText([
+              "ytd-reel-video-renderer[is-active] h2.title",
+              "ytd-reel-video-renderer[is-active] .ytShortsVideoTitleViewModelShortsVideoTitle",
+            ]) || document.title.replace(/\s*-\s*YouTube$/i, "").trim(),
+          artist: queryFirstText([
+            "ytd-reel-video-renderer[is-active] #channel-name a",
+            "ytd-reel-video-renderer[is-active] .ytd-channel-name a",
+          ]),
+          artworkUrl,
+        };
+      }
+
+      const rawDocTitle = document.title.replace(/\s*-\s*YouTube$/i, "").trim();
+      const title = queryFirstText([
+        "ytd-watch-metadata h1 yt-formatted-string",
+        "#title h1 yt-formatted-string",
+        "h1.ytd-watch-metadata",
+      ]);
+      const artist = queryFirstText([
+        "ytd-watch-metadata #channel-name a",
+        "#owner #channel-name a",
+        "ytd-video-owner-renderer #channel-name a",
+      ]);
+      return {
+        title: title || (rawDocTitle.toLowerCase() !== "youtube" ? rawDocTitle : ""),
+        artist,
+        artworkUrl,
+      };
+    }
+
+    const poster =
+      mediaEl && mediaEl.tagName === "VIDEO" && mediaEl.poster ? mediaEl.poster : null;
+    const title =
+      queryMetaContent('meta[property="og:title"]') || (document.title || "").trim();
+    const artist =
+      queryMetaContent('meta[name="author"]') ||
+      queryMetaContent('meta[property="og:site_name"]') ||
+      host.replace(/^www\./i, "");
+    const artworkUrl = poster || queryMetaContent('meta[property="og:image"]') || null;
+
+    return { title, artist, artworkUrl };
+  }
+
+  function buildMediaSnapshot() {
+    const mediaEl = collectMediaElements();
+    const isolated = readIsolatedMediaSession();
+    const isYT = helpers.isYoutubeHost(window.location.hostname);
+    const hasActiveSessionOnly =
+      !mediaEl &&
+      (Boolean(mainWorldSnapshot.metadata) || Boolean(isolated.metadata)) &&
+      (mainWorldSnapshot.playbackState !== "none" || isolated.playbackState !== "none");
+
+    if (!mediaEl && !hasActiveSessionOnly) {
+      return {
+        hasMedia: false,
+        url: window.location.href,
+      };
+    }
+
+    const domMeta = readDomMetadata(mediaEl);
+    const merged = helpers.mergeMediaMetadata({
+      isolatedMeta: isolated.metadata,
+      mainMeta: mainWorldSnapshot.metadata,
+      domMeta,
+      isYouTube: isYT,
+    });
+
+    let status = "PAUSED";
+    let position = 0;
+    let duration = 0;
+    let volume = 1;
+    let elementMuted = false;
+
+    if (mediaEl) {
+      if (mediaEl.ended) status = "STOPPED";
+      else if (mediaEl.paused) status = "PAUSED";
+      else status = "PLAYING";
+
+      position = Number.isFinite(mediaEl.currentTime) ? Math.max(0, mediaEl.currentTime) : 0;
+      duration = Number.isFinite(mediaEl.duration) ? Math.max(0, mediaEl.duration) : 0;
+      volume = typeof mediaEl.volume === "number" ? Math.max(0, Math.min(1, mediaEl.volume)) : 1;
+      elementMuted = Boolean(mediaEl.muted);
+    } else {
+      const pbState = mainWorldSnapshot.playbackState || isolated.playbackState;
+      status = pbState === "playing" ? "PLAYING" : "PAUSED";
+    }
+
+    const skipBtn = isYT ? findClickableSkipAdButton() : null;
+    const nextBtn = isYT ? findReadyYoutubeControl(".ytp-next-button") : null;
+    const prevBtn = isYT ? findReadyYoutubeControl(".ytp-prev-button") : null;
+
+    return {
+      hasMedia: true,
+      url: window.location.href,
+      title: merged.title || (document.title || "").trim() || window.location.hostname,
+      artist: merged.artist || "",
+      album: merged.album || "",
+      artworkUrl: merged.artworkUrl || null,
+      status,
+      position: Math.round(position * 100) / 100,
+      duration: Math.round(duration * 100) / 100,
+      volume: Math.round(volume * 1000) / 1000,
+      elementMuted,
+      controls: {
+        play: Boolean(mediaEl),
+        pause: Boolean(mediaEl),
+        toggle: Boolean(mediaEl),
+        next: Boolean(nextBtn),
+        previous: Boolean(prevBtn),
+        seek: Boolean(mediaEl && (duration > 0 || position > 0)),
+        skipAd: Boolean(skipBtn),
+      },
+      metadataProbe: merged.probe,
+    };
+  }
+
+  function sendSnapshot(force = false) {
+    const snapshot = buildMediaSnapshot();
+    // Quantize position to whole seconds for diffing outside PLAYING/seeking
+    const sigSnapshot = snapshot.hasMedia
+      ? { ...snapshot, position: Math.floor(snapshot.position) }
+      : snapshot;
+    const key = JSON.stringify(sigSnapshot);
+    if (!force && key === lastSentKey) {
+      return;
+    }
+    lastSentKey = key;
+
+    try {
+      chrome.runtime.sendMessage({ type: "tab_media_state", payload: snapshot }, () => {
+        void chrome.runtime.lastError;
+      });
+    } catch {
+      // Extension context may be invalidated during reload
+    }
+  }
+
+  function attachElementListeners(el) {
+    if (!el || boundElements.has(el)) return;
+    boundElements.add(el);
+
+    const immediateEvents = [
+      "play",
+      "playing",
+      "pause",
+      "ended",
+      "seeked",
+      "volumechange",
+      "loadedmetadata",
+      "durationchange",
+      "emptied",
+    ];
+    for (const evt of immediateEvents) {
+      el.addEventListener(evt, () => sendSnapshot(true));
+    }
+
+    el.addEventListener("timeupdate", () => {
+      const now = Date.now();
+      if (now - lastTimeUpdateSentAt >= 900) {
+        lastTimeUpdateSentAt = now;
+        sendSnapshot(true);
+      }
+    });
+  }
+
+  async function executeMediaCommand(action, value) {
+    const mediaEl = collectMediaElements();
+
+    if (action === "skip_ad") {
+      const skipBtn = findClickableSkipAdButton();
+      if (!skipBtn) return false;
+      skipBtn.click();
+      setTimeout(() => sendSnapshot(true), 150);
+      return true;
+    }
+
+    if (action === "next") {
+      const nextBtn = findReadyYoutubeControl(".ytp-next-button");
+      if (!nextBtn) return false;
+      nextBtn.click();
+      setTimeout(() => sendSnapshot(true), 300);
+      return true;
+    }
+
+    if (action === "previous") {
+      const prevBtn = findReadyYoutubeControl(".ytp-prev-button");
+      if (!prevBtn) return false;
+      prevBtn.click();
+      setTimeout(() => sendSnapshot(true), 300);
+      return true;
+    }
+
+    if (!mediaEl) return false;
+
+    if (action === "play") {
+      try {
+        await mediaEl.play();
+        sendSnapshot(true);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    if (action === "pause") {
+      mediaEl.pause();
+      sendSnapshot(true);
+      return true;
+    }
+
+    if (action === "toggle") {
+      if (mediaEl.paused) {
+        try {
+          await mediaEl.play();
+        } catch {
+          return false;
+        }
+      } else {
+        mediaEl.pause();
+      }
+      sendSnapshot(true);
+      return true;
+    }
+
+    if (action === "seek") {
+      const target = helpers.computeSeekTarget(mediaEl.currentTime, mediaEl.duration, value, false);
+      mediaEl.currentTime = target;
+      sendSnapshot(true);
+      return true;
+    }
+
+    if (action === "seek_relative") {
+      const target = helpers.computeSeekTarget(mediaEl.currentTime, mediaEl.duration, value, true);
+      mediaEl.currentTime = target;
+      sendSnapshot(true);
+      return true;
+    }
+
+    return false;
+  }
+
+  function applyElementVolume(level, unmuteElement) {
+    const mediaEl = collectMediaElements();
+    if (!mediaEl) return false;
+    if (typeof level === "number") {
+      const clamped = helpers.clampVolume(level);
+      if (clamped === null) return false;
+      mediaEl.volume = clamped;
+    }
+    if (unmuteElement === true && mediaEl.muted) {
+      mediaEl.muted = false;
+    }
+    sendSnapshot(true);
+    return true;
+  }
+
+  window.addEventListener("message", (event) => {
+    if (event.source !== window || event.origin !== window.location.origin) {
+      return;
+    }
+    const data = event.data;
+    if (data && data.source === MAIN_BRIDGE_SOURCE && data.type === "media_session_snapshot") {
+      mainWorldSnapshot = data.payload || { metadata: null, playbackState: "none" };
+      sendSnapshot(false);
+    }
+  });
+
+  window.addEventListener("yt-navigate-finish", () => {
+    setTimeout(() => {
+      if (window.location.origin && window.location.origin !== "null") {
+        window.postMessage(
+          { source: ISOLATED_REQUEST_SOURCE, type: "request_snapshot" },
+          window.location.origin
+        );
+      }
+      sendSnapshot(true);
+    }, 250);
+  });
+
+  const observer = new MutationObserver(() => {
+    if (mutationTimer !== null) return;
+    mutationTimer = setTimeout(() => {
+      mutationTimer = null;
+      sendSnapshot(false);
+    }, 300);
+  });
+
+  if (document.body) {
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["class", "style", "disabled", "aria-disabled", "src"],
+    });
+  }
+
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (!message || typeof message !== "object") return false;
+
+    if (message.type === "request_media_state") {
+      if (window.location.origin && window.location.origin !== "null") {
+        window.postMessage(
+          { source: ISOLATED_REQUEST_SOURCE, type: "request_snapshot" },
+          window.location.origin
+        );
+      }
+      sendSnapshot(true);
+      sendResponse({ ok: true });
+      return false;
+    }
+
+    if (message.type === "media_command") {
+      executeMediaCommand(message.action, message.value)
+        .then((ok) => sendResponse({ ok }))
+        .catch(() => sendResponse({ ok: false }));
+      return true;
+    }
+
+    if (message.type === "tab_media_volume") {
+      const ok = applyElementVolume(message.value, message.unmuteElement);
+      sendResponse({ ok });
+      return false;
+    }
+
+    return false;
+  });
+
+  if (window.location.origin && window.location.origin !== "null") {
+    window.postMessage(
+      { source: ISOLATED_REQUEST_SOURCE, type: "request_snapshot" },
+      window.location.origin
+    );
+  }
+  sendSnapshot(true);
+})();

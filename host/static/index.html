@@ -106,6 +106,32 @@
     @media (max-width: 560px) {
       .audio-row { grid-template-columns: 1fr; }
     }
+    .thumb {
+      width: 88px;
+      height: 50px;
+      object-fit: cover;
+      border-radius: 8px;
+      border: 1px solid var(--separator);
+      flex-shrink: 0;
+      background: var(--bg);
+    }
+    .session-head { display: flex; gap: 12px; align-items: center; }
+    .open-grid { display: grid; gap: 10px; }
+    .input-row { display: flex; gap: 8px; flex-wrap: wrap; }
+    input[type="text"], input[type="url"] {
+      flex: 1 1 220px;
+      min-height: 38px;
+      padding: 8px 12px;
+      border-radius: 10px;
+      border: 1px solid var(--separator);
+      background: var(--bg);
+      color: var(--text);
+      font-size: 0.9rem;
+    }
+    button.skip-ad {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
   </style>
 </head>
 <body>
@@ -123,6 +149,20 @@
     <section class="card">
       <h2>Sessões de Mídia Unificadas</h2>
       <div id="sessions-list" class="meta-sub">Nenhuma mídia detectada no momento.</div>
+    </section>
+
+    <section class="card">
+      <h2>Abrir no Chrome (Extensão)</h2>
+      <div class="open-grid">
+        <form id="yt-search-form" class="input-row">
+          <input id="yt-search-input" type="text" placeholder="Buscar no YouTube (ex.: lo-fi chill)" />
+          <button id="yt-search-btn" type="submit" class="primary" disabled>Buscar no YouTube</button>
+        </form>
+        <form id="open-url-form" class="input-row">
+          <input id="open-url-input" type="url" placeholder="https://www.youtube.com/watch?v=..." />
+          <button id="open-url-btn" type="submit" disabled>Abrir URL</button>
+        </form>
+      </div>
     </section>
 
     <section class="card">
@@ -153,6 +193,12 @@
     const sessionsList = document.getElementById("sessions-list");
     const masterBox = document.getElementById("master-volume");
     const audioBox = document.getElementById("audio-sessions");
+    const ytSearchForm = document.getElementById("yt-search-form");
+    const ytSearchInput = document.getElementById("yt-search-input");
+    const ytSearchBtn = document.getElementById("yt-search-btn");
+    const openUrlForm = document.getElementById("open-url-form");
+    const openUrlInput = document.getElementById("open-url-input");
+    const openUrlBtn = document.getElementById("open-url-btn");
 
     function fmtTime(sec) {
       const s = Math.max(0, Math.floor(sec || 0));
@@ -165,6 +211,19 @@
       const div = document.createElement("div");
       div.textContent = text || "";
       return div.innerHTML.replace(/"/g, "&quot;");
+    }
+
+    function safeHttpUrl(rawUrl) {
+      if (!rawUrl) return "";
+      try {
+        const parsed = new URL(rawUrl);
+        if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+          return parsed.href;
+        }
+      } catch {
+        return "";
+      }
+      return "";
     }
 
     function showError(msg) {
@@ -187,6 +246,22 @@
       sendPayload(payload);
     }
 
+    ytSearchForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const query = ytSearchInput.value.trim();
+      if (!query) return;
+      sendPayload({ type: "open", mode: "youtube_search", query });
+      ytSearchInput.value = "";
+    });
+
+    openUrlForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const url = openUrlInput.value.trim();
+      if (!url) return;
+      sendPayload({ type: "open", mode: "url", url });
+      openUrlInput.value = "";
+    });
+
     function sendVolume(target, value, muted = undefined) {
       const payload = { type: "volume", target };
       if (value !== undefined) payload.value = value;
@@ -202,7 +277,8 @@
       const btn = event.target.closest("button");
       if (!btn) return;
       if (btn.dataset.cmdSession && btn.dataset.cmdAction) {
-        sendCommand(btn.dataset.cmdSession, btn.dataset.cmdAction);
+        const val = btn.dataset.cmdValue !== undefined ? Number(btn.dataset.cmdValue) : undefined;
+        sendCommand(btn.dataset.cmdSession, btn.dataset.cmdAction, val);
       } else if (btn.dataset.selectSession) {
         selectSession(btn.dataset.selectSession);
       } else if (btn.dataset.muteTarget) {
@@ -243,6 +319,8 @@
         ? "Extensão Chrome: conectada"
         : "Extensão Chrome: desconectada";
       extBadge.className = `badge ${state.extensionConnected ? "ok" : ""}`;
+      ytSearchBtn.disabled = !state.extensionConnected;
+      openUrlBtn.disabled = !state.extensionConnected;
 
       if (!state.sessions || state.sessions.length === 0) {
         sessionsList.innerHTML = `<div class="meta-sub">Nenhuma sessão de mídia ativa encontrada.</div>`;
@@ -253,24 +331,39 @@
           const pos = Math.min(dur || s.position || 0, Math.max(0, s.position || 0));
           const toggleAction = s.status === "PLAYING" ? "pause" : "play";
           const toggleLabel = s.status === "PLAYING" ? "Pausar" : "Tocar";
+          const artHref = safeHttpUrl(s.artworkUrl);
+          const thumbHtml = artHref
+            ? `<img class="thumb" src="${escapeHtml(artHref)}" alt="" referrerpolicy="no-referrer" />`
+            : "";
           const tabVolHtml = s.source === "chrome" && s.volume !== null
-            ? `<div class="slider-row">
+            ? `<div class="audio-row" style="border-bottom:none; padding: 2px 0;">
+                 <span class="meta-sub">Vol. aba: ${Math.round(s.volume * 100)}%</span>
                  <input type="range" min="0" max="1" step="0.01" value="${s.volume}"
                    data-vol-target="${escapeHtml(s.id)}" />
-                 <span class="meta-sub">Vol. aba: ${Math.round(s.volume * 100)}%</span>
+                 <button data-mute-target="${escapeHtml(s.id)}" data-mute-next="${!s.muted}">
+                   ${s.muted ? "Ativar som" : "Silenciar aba"}
+                 </button>
                </div>`
+            : "";
+          const skipAdBtn = s.controls && s.controls.skipAd
+            ? `<button class="skip-ad" data-cmd-session="${escapeHtml(s.id)}" data-cmd-action="skip_ad">
+                 Pular anúncio
+               </button>`
             : "";
           return `
             <div class="session-item ${isActive ? "active" : ""}">
               <div class="row">
-                <div>
-                  <div class="meta-title">${escapeHtml(s.title || "(Sem título)")}</div>
-                  <div class="meta-sub">
-                    ${escapeHtml(s.artist || "Artista desconhecido")} · ${escapeHtml(s.app)}
-                    · status: <strong>${escapeHtml(s.status)}</strong>
-                  </div>
-                  <div class="meta-sub" style="font-size:0.75rem;">
-                    origem: <code>${escapeHtml(s.source)}</code> · id: <code>${escapeHtml(s.id)}</code>
+                <div class="session-head">
+                  ${thumbHtml}
+                  <div>
+                    <div class="meta-title">${escapeHtml(s.title || "(Sem título)")}</div>
+                    <div class="meta-sub">
+                      ${escapeHtml(s.artist || "Canal / Artista desconhecido")} · ${escapeHtml(s.app)}
+                      · status: <strong>${escapeHtml(s.status)}</strong>${s.muted ? " · <strong>Silenciada</strong>" : ""}
+                    </div>
+                    <div class="meta-sub" style="font-size:0.75rem;">
+                      origem: <code>${escapeHtml(s.source)}</code> · id: <code>${escapeHtml(s.id)}</code>
+                    </div>
                   </div>
                 </div>
                 <button data-select-session="${escapeHtml(s.id)}" ${isActive ? "disabled" : ""}>
@@ -287,12 +380,17 @@
               <div class="controls">
                 <button data-cmd-session="${escapeHtml(s.id)}" data-cmd-action="previous"
                   ${s.controls && s.controls.previous ? "" : "disabled"}>Anterior</button>
+                <button data-cmd-session="${escapeHtml(s.id)}" data-cmd-action="seek_relative" data-cmd-value="-10"
+                  ${s.controls && s.controls.seek ? "" : "disabled"}>-10s</button>
                 <button class="primary" data-cmd-session="${escapeHtml(s.id)}" data-cmd-action="${toggleAction}"
                   ${s.controls && (s.controls.play || s.controls.pause || s.controls.toggle) ? "" : "disabled"}>
                   ${toggleLabel}
                 </button>
+                <button data-cmd-session="${escapeHtml(s.id)}" data-cmd-action="seek_relative" data-cmd-value="10"
+                  ${s.controls && s.controls.seek ? "" : "disabled"}>+10s</button>
                 <button data-cmd-session="${escapeHtml(s.id)}" data-cmd-action="next"
                   ${s.controls && s.controls.next ? "" : "disabled"}>Próximo</button>
+                ${skipAdBtn}
               </div>
             </div>
           `;

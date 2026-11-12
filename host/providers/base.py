@@ -14,7 +14,16 @@ MediaStatus = Literal[
     "CLOSED",
     "UNKNOWN",
 ]
-MediaAction = Literal["play", "pause", "toggle", "next", "previous", "seek"]
+MediaAction = Literal[
+    "play",
+    "pause",
+    "toggle",
+    "next",
+    "previous",
+    "seek",
+    "seek_relative",
+    "skip_ad",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +36,7 @@ class PlaybackControls:
     next: bool = False
     previous: bool = False
     seek: bool = False
+    skip_ad: bool = False
 
 
 @dataclass(frozen=True, slots=True)

@@ -5,13 +5,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from host.config import HostSettings
+from host.config import HostSettings, normalize_origin
 from host.protocol import ErrorMessage
 from host.providers.base import AudioControlProvider, SessionProvider
 from host.providers.chrome_extension import ChromeExtensionProvider
@@ -20,6 +21,7 @@ from host.state import HostStateCoordinator
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 LOCALHOST_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
+logger = logging.getLogger(__name__)
 
 
 def create_app(
@@ -92,6 +94,7 @@ def create_app(
                 "host": cfg.host,
                 "port": cfg.port,
                 "extensionConnected": coordinator.extension_connected,
+                "extensionId": cfg.extension_id,
             }
         )
 
@@ -102,6 +105,18 @@ def create_app(
 
     @app.websocket("/ws")
     async def control_websocket(websocket: WebSocket) -> None:
+        client_host = websocket.client.host if websocket.client is not None else ""
+        if cfg.host in {"127.0.0.1", "::1", "localhost"} and client_host not in LOCALHOST_HOSTS:
+            await websocket.close(code=1008, reason="Acesso permitido apenas via localhost")
+            return
+
+        origin = normalize_origin(websocket.headers.get("origin"))
+        allowed_origins = cfg.get_allowed_ws_origins()
+        if not origin or origin not in allowed_origins:
+            logger.warning("WebSocket /ws rejeitado por Origin inválido: %r", origin)
+            await websocket.close(code=1008, reason="Origin não autorizada")
+            return
+
         await websocket.accept()
         coordinator.register_client(websocket)
         try:
@@ -133,6 +148,17 @@ def create_app(
         client_host = websocket.client.host if websocket.client is not None else ""
         if client_host not in LOCALHOST_HOSTS:
             await websocket.close(code=1008, reason="Acesso permitido apenas via localhost")
+            return
+
+        origin = normalize_origin(websocket.headers.get("origin"))
+        expected_origin = cfg.get_extension_origin()
+        if not expected_origin or origin != expected_origin:
+            logger.warning(
+                "WebSocket /ws/extension rejeitado por Origin inválido: %r (esperado: %r)",
+                origin,
+                expected_origin,
+            )
+            await websocket.close(code=1008, reason="Origin de extensão não autorizada")
             return
 
         await websocket.accept()

@@ -273,6 +273,28 @@ class WindowsProvider:
                 return False
             ticks = int(round(value * TICKS_PER_SECOND))
             return bool(await target_session.try_change_playback_position_async(ticks))
+        if action == "seek_relative":
+            if value is None:
+                return False
+            from winrt.windows.media.control import (
+                GlobalSystemMediaTransportControlsSessionPlaybackStatus as PlaybackStatus,
+            )
+
+            info = target_session.get_playback_info()
+            tl = target_session.get_timeline_properties()
+            status_name = PlaybackStatus(info.playback_status).name
+            current_pos = estimate_position_seconds(
+                tl.position,
+                tl.end_time,
+                tl.last_updated_time,
+                status_name,
+            )
+            dur_sec = max(0.0, tl.end_time.total_seconds())
+            target_sec = max(0.0, current_pos + float(value))
+            if dur_sec > 0:
+                target_sec = min(target_sec, dur_sec)
+            ticks = int(round(target_sec * TICKS_PER_SECOND))
+            return bool(await target_session.try_change_playback_position_async(ticks))
         return False
 
     async def set_session_volume(

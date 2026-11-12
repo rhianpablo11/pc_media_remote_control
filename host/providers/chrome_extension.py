@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections.abc import Awaitable, Callable
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from host.providers.base import (
     MediaAction,
@@ -41,6 +41,7 @@ def parse_chrome_tab_session(raw_tab: dict[str, Any]) -> MediaSessionInfo:
         next=bool(raw_controls.get("next", False)),
         previous=bool(raw_controls.get("previous", False)),
         seek=bool(raw_controls.get("seek", True)),
+        skip_ad=bool(raw_controls.get("skipAd", raw_controls.get("skip_ad", False))),
     )
     volume_raw = raw_tab.get("volume")
     volume = max(0.0, min(1.0, float(volume_raw))) if volume_raw is not None else None
@@ -124,6 +125,16 @@ class ChromeExtensionProvider:
             future = self._pending.pop(req_id, None)
             if future is not None and not future.done():
                 future.set_result(bool(payload.get("ok", False)))
+            return
+
+        if msg_type == "ping" and self._transport is not None:
+            await self._transport.send_json(
+                {
+                    "v": 1,
+                    "type": "pong",
+                    "ts": payload.get("ts"),
+                }
+            )
 
     async def list_sessions(self) -> list[MediaSessionInfo]:
         """Return Chrome tab media sessions reported by the connected extension."""
@@ -188,4 +199,23 @@ class ChromeExtensionProvider:
             payload["value"] = max(0.0, min(1.0, float(level)))
         if muted is not None:
             payload["muted"] = bool(muted)
+        return await self._send_request(payload)
+
+    async def open_in_browser(
+        self,
+        mode: Literal["youtube_search", "url"],
+        query: str | None = None,
+        url: str | None = None,
+    ) -> bool:
+        """Ask the extension to open a YouTube search or URL in a new Chrome tab."""
+        if not self.is_connected:
+            return False
+        payload: dict[str, Any] = {
+            "type": "open",
+            "mode": mode,
+        }
+        if query is not None:
+            payload["query"] = query
+        if url is not None:
+            payload["url"] = url
         return await self._send_request(payload)

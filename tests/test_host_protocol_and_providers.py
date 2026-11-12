@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from starlette.websockets import WebSocketDisconnect
 
 from host.app import create_app
-from host.config import HostSettings
+from host.config import DEFAULT_EXTENSION_ID, HostSettings, extension_id_from_public_key_b64
 from host.protocol import (
     CommandMessage,
+    OpenMessage,
     PingMessage,
     SelectMessage,
     VolumeMessage,
@@ -210,6 +214,34 @@ def test_protocol_v1_validation() -> None:
     ping = parse_client_message({"v": 1, "type": "ping", "requestId": "r1"})
     assert isinstance(ping, PingMessage)
 
+    rel_cmd = parse_client_message(
+        {
+            "v": 1,
+            "type": "command",
+            "sessionId": "chrome:11",
+            "action": "seek_relative",
+            "value": -10,
+        }
+    )
+    assert isinstance(rel_cmd, CommandMessage)
+    assert rel_cmd.value == -10.0
+
+    skip_cmd = parse_client_message(
+        {"v": 1, "type": "command", "sessionId": "chrome:11", "action": "skip_ad"}
+    )
+    assert isinstance(skip_cmd, CommandMessage)
+
+    open_search = parse_client_message(
+        {"v": 1, "type": "open", "mode": "youtube_search", "query": "  lo-fi study  "}
+    )
+    assert isinstance(open_search, OpenMessage)
+    assert open_search.query == "lo-fi study"
+
+    open_url = parse_client_message(
+        {"v": 1, "type": "open", "mode": "url", "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}
+    )
+    assert isinstance(open_url, OpenMessage)
+
     with pytest.raises(ValidationError):
         parse_client_message({"v": 2, "type": "ping"})
     with pytest.raises(ValidationError):
@@ -217,9 +249,19 @@ def test_protocol_v1_validation() -> None:
             {"v": 1, "type": "command", "sessionId": "windows:Spotify.exe:0", "action": "seek"}
         )
     with pytest.raises(ValidationError):
+        parse_client_message(
+            {"v": 1, "type": "command", "sessionId": "chrome:11", "action": "seek_relative"}
+        )
+    with pytest.raises(ValidationError):
         parse_client_message({"v": 1, "type": "volume", "target": "master", "value": 1.5})
     with pytest.raises(ValidationError):
         parse_client_message({"v": 1, "type": "volume", "target": "master"})
+    with pytest.raises(ValidationError):
+        parse_client_message({"v": 1, "type": "open", "mode": "youtube_search", "query": "   "})
+    with pytest.raises(ValidationError):
+        parse_client_message({"v": 1, "type": "open", "mode": "url", "url": "javascript:alert(1)"})
+    with pytest.raises(ValidationError):
+        parse_client_message({"v": 1, "type": "open", "mode": "url", "url": "chrome://extensions"})
 
 
 def test_windows_helper_functions() -> None:
@@ -348,7 +390,7 @@ def test_fastapi_endpoints_and_websockets_with_mocked_providers() -> None:
         assert api_state["v"] == 1
         assert len(api_state["sessions"]) == 2
 
-        with client.websocket_connect("/ws") as ws:
+        with client.websocket_connect("/ws", headers={"origin": "http://127.0.0.1:8765"}) as ws:
             initial = ws.receive_json()
             assert initial["type"] == "state"
             assert initial["activeSessionId"] == "windows:Spotify.exe:0"
@@ -387,8 +429,16 @@ def test_fastapi_endpoints_and_websockets_with_mocked_providers() -> None:
             assert missing_err["type"] == "error"
             assert missing_err["code"] == "session_not_found"
 
+            ws.send_json({"v": 1, "type": "open", "mode": "youtube_search", "query": "lofi"})
+            open_err = ws.receive_json()
+            assert open_err["type"] == "error"
+            assert open_err["code"] == "open_failed"
+
             # Connect Chrome extension via /ws/extension and observe deduplication live
-            with client.websocket_connect("/ws/extension") as ext_ws:
+            ext_origin = f"chrome-extension://{DEFAULT_EXTENSION_ID}"
+            with client.websocket_connect(
+                "/ws/extension", headers={"origin": ext_origin}
+            ) as ext_ws:
                 _ = ws.receive_json()  # broadcast on extension attach
                 ext_ws.send_json(
                     {
@@ -399,10 +449,18 @@ def test_fastapi_endpoints_and_websockets_with_mocked_providers() -> None:
                                 "tabId": "77",
                                 "title": "YouTube Tab",
                                 "channel": "Canal X",
+                                "artworkUrl": "https://i.ytimg.com/vi/abc123456/hqdefault.jpg",
                                 "status": "PLAYING",
                                 "position": 3.0,
                                 "duration": 60.0,
                                 "volume": 0.9,
+                                "controls": {
+                                    "play": True,
+                                    "pause": True,
+                                    "toggle": True,
+                                    "seek": True,
+                                    "skipAd": True,
+                                },
                             }
                         ],
                     }
@@ -412,3 +470,97 @@ def test_fastapi_endpoints_and_websockets_with_mocked_providers() -> None:
                 ids = [s["id"] for s in ext_state["sessions"]]
                 assert "chrome:77" in ids
                 assert "windows:chrome.exe:0" not in ids
+                tab_77 = next(s for s in ext_state["sessions"] if s["id"] == "chrome:77")
+                assert tab_77["controls"]["skipAd"] is True
+
+                # Extension keepalive ping -> pong
+                ext_ws.send_json({"type": "ping", "ts": 987654})
+                ext_pong = ext_ws.receive_json()
+                assert ext_pong == {"v": 1, "type": "pong", "ts": 987654}
+
+                # Skip-ad command + open forwarding via extension
+                ws.send_json(
+                    {"v": 1, "type": "command", "sessionId": "chrome:77", "action": "skip_ad"}
+                )
+                fwd_skip = ext_ws.receive_json()
+                assert fwd_skip["type"] == "command"
+                assert fwd_skip["action"] == "skip_ad"
+                assert fwd_skip["tabId"] == "77"
+                ext_ws.send_json(
+                    {"type": "extension_ack", "requestId": fwd_skip["requestId"], "ok": True}
+                )
+                _ = ws.receive_json()
+
+                ws.send_json(
+                    {"v": 1, "type": "open", "mode": "youtube_search", "query": "synthwave"}
+                )
+                fwd_open = ext_ws.receive_json()
+                assert fwd_open["type"] == "open"
+                assert fwd_open["mode"] == "youtube_search"
+                assert fwd_open["query"] == "synthwave"
+                ext_ws.send_json(
+                    {"type": "extension_ack", "requestId": fwd_open["requestId"], "ok": True}
+                )
+                _ = ws.receive_json()
+
+
+def test_manifest_key_matches_default_extension_id() -> None:
+    manifest_path = Path(__file__).resolve().parent.parent / "extension" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert "key" in manifest and manifest["key"]
+    assert extension_id_from_public_key_b64(manifest["key"]) == DEFAULT_EXTENSION_ID
+
+
+def test_websocket_origin_validation_rejects_invalid_and_missing_origins() -> None:
+    win = FakeWindowsProvider()
+    ext = ChromeExtensionProvider()
+    app = create_app(
+        settings=HostSettings(
+            host="127.0.0.1",
+            port=8765,
+            poll_interval_sec=60.0,
+            extra_ws_origins=("http://192.168.1.50:8765",),
+        ),
+        providers=[ext, win],
+        audio_provider=win,
+        chrome_provider=ext,
+    )
+
+    with TestClient(app) as client:
+        # /ws valid origins (own loopback + configured LAN origin for Fase 4)
+        for valid_origin in (
+            "http://127.0.0.1:8765",
+            "http://localhost:8765",
+            "http://192.168.1.50:8765",
+        ):
+            with client.websocket_connect("/ws", headers={"origin": valid_origin}) as ws:
+                assert ws.receive_json()["type"] == "state"
+
+        # /ws rejected origins (missing, evil domain, wrong port, extension origin, null)
+        for invalid_headers in (
+            {},
+            {"origin": "http://evil.com"},
+            {"origin": "http://127.0.0.1:9999"},
+            {"origin": f"chrome-extension://{DEFAULT_EXTENSION_ID}"},
+            {"origin": "null"},
+        ):
+            with pytest.raises((WebSocketDisconnect, Exception)), client.websocket_connect(
+                "/ws", headers=invalid_headers
+            ):
+                pass
+
+        # /ws/extension accepts ONLY chrome-extension://<DEFAULT_EXTENSION_ID>
+        valid_ext_origin = f"chrome-extension://{DEFAULT_EXTENSION_ID}"
+        with client.websocket_connect("/ws/extension", headers={"origin": valid_ext_origin}):
+            pass
+
+        for bad_ext_headers in (
+            {},
+            {"origin": "http://127.0.0.1:8765"},
+            {"origin": "http://evil.com"},
+            {"origin": "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+        ):
+            with pytest.raises((WebSocketDisconnect, Exception)), client.websocket_connect(
+                "/ws/extension", headers=bad_ext_headers
+            ):
+                pass

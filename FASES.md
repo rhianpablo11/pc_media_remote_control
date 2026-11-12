@@ -1,6 +1,6 @@
 # Fases — PC Media Control
 
-**Fase atual: 1**
+**Fase atual: 2**
 
 Regra: concluir a fase, marcar os checkboxes, commitar, parar e reportar. Só avançar quando o usuário autorizar.
 
@@ -25,12 +25,12 @@ Objetivo: descobrir o que o Windows realmente nos entrega, antes de construir qu
 **Aceite:** pelo navegador do próprio notebook, consigo ver sessões unificadas e controlar mídia e volume.
 
 ## Fase 2 — Extensão do Chrome (MV3)
-- [ ] Projeto `extension/` em Manifest V3 (`content script` + `service worker`) conectado ao host via WebSocket em `localhost`
-- [ ] Validar na extensão se título e capa/miniatura podem ser lidos da página (`navigator.mediaSession` + fallback DOM) e registrar o resultado em `ARQUITETURA.md`
-- [ ] Listar abas tocando com título, canal e miniatura, e controlar `play`/`pause`/`seek` por aba
-- [ ] Volume por aba pela extensão (volume do elemento `<video>` e/ou silenciar a aba)
-- [ ] Pular anúncio do YouTube (quando o botão existir)
-- [ ] Abrir busca no YouTube / abrir URL a partir do celular
+- [x] Projeto `extension/` em Manifest V3 (`content script` + `service worker`) conectado ao host via WebSocket em `localhost` *(com validação estrita de `Origin` em `/ws` e `/ws/extension`, ID fixo via `"key"` em `manifest.json`)*
+- [x] Validar na extensão se título e capa/miniatura podem ser lidos da página (`navigator.mediaSession` + fallback DOM) e registrar o resultado em `ARQUITETURA.md` *(implementada leitura `ISOLATED` + ponte `MAIN` + seletores DOM YouTube/genéricos + diagnóstico no `popup.html`, com arquitetura e restrições MV3 registradas em `ARQUITETURA.md`; validação ao vivo no Chrome via `chrome://extensions` pendente de execução no navegador do usuário)*
+- [x] Listar abas tocando com título, canal e miniatura, e controlar `play`/`pause`/`seek` por aba *(inclui `±10s` via `seek_relative` e `next`/`previous` quando disponíveis)*
+- [x] Volume por aba pela extensão (volume do elemento `<video>` e/ou silenciar a aba) *(slider no `<video>`/`<audio>` + `chrome.tabs.update({ muted })`)*
+- [x] Pular anúncio do YouTube (quando o botão existir) *(clica apenas no botão visível/habilitado "Pular" quando aparece; sem bloqueio de anúncios)*
+- [x] Abrir busca no YouTube / abrir URL a partir do celular *(mensagem `open` com validação `http://`/`https://` e card de teste na página do host)*
 
 **Aceite:** com 2+ abas do YouTube tocando, controlo reprodução e volume de cada aba individualmente, pulo anúncio e abro vídeo novo sem tocar no notebook (sem duplicar sessões do `chrome.exe` no host).
 

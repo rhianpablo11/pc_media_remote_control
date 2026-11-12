@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import math
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, TypeAdapter, model_validator
 
@@ -25,6 +27,7 @@ class ControlsPayload(BaseModel):
     next: bool = False
     previous: bool = False
     seek: bool = False
+    skipAd: bool = False
 
 
 class SessionPayload(BaseModel):
@@ -110,8 +113,14 @@ class CommandMessage(BaseModel):
 
     @model_validator(mode="after")
     def _validate_seek_value(self) -> CommandMessage:
-        if self.action == "seek" and (self.value is None or self.value < 0):
+        if self.action == "seek" and (
+            self.value is None or not math.isfinite(self.value) or self.value < 0
+        ):
             raise ValueError("O comando 'seek' exige 'value' >= 0 em segundos.")
+        if self.action == "seek_relative" and (
+            self.value is None or not math.isfinite(self.value)
+        ):
+            raise ValueError("O comando 'seek_relative' exige 'value' finito em segundos.")
         return self
 
 
@@ -149,8 +158,36 @@ class PingMessage(BaseModel):
     requestId: str | None = None
 
 
+class OpenMessage(BaseModel):
+    """Client -> server request to open a YouTube search or URL in Chrome."""
+
+    v: Literal[1]
+    type: Literal["open"]
+    mode: Literal["youtube_search", "url"]
+    query: str | None = None
+    url: str | None = None
+    requestId: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_open_target(self) -> OpenMessage:
+        if self.mode == "youtube_search":
+            if not self.query or not self.query.strip():
+                raise ValueError("O modo 'youtube_search' exige 'query' não vazia.")
+            self.query = self.query.strip()
+            return self
+
+        if not self.url or not self.url.strip():
+            raise ValueError("O modo 'url' exige uma URL http/https válida.")
+        cleaned_url = self.url.strip()
+        parsed = urlsplit(cleaned_url)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("Apenas URLs com esquema http:// ou https:// são permitidas.")
+        self.url = cleaned_url
+        return self
+
+
 ClientMessage = Annotated[
-    CommandMessage | VolumeMessage | SelectMessage | PingMessage,
+    CommandMessage | VolumeMessage | SelectMessage | PingMessage | OpenMessage,
     Field(discriminator="type"),
 ]
 _CLIENT_MESSAGE_ADAPTER: TypeAdapter[ClientMessage] = TypeAdapter(ClientMessage)
@@ -183,6 +220,7 @@ def session_to_payload(session: MediaSessionInfo) -> SessionPayload:
             next=c.next,
             previous=c.previous,
             seek=c.seek,
+            skipAd=c.skip_ad,
         ),
         volume=round(session.volume, 3) if session.volume is not None else None,
         muted=session.muted,

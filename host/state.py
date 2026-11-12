@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from host.protocol import (
     CommandMessage,
     ErrorMessage,
+    OpenMessage,
     PingMessage,
     PongMessage,
     SelectMessage,
@@ -244,7 +245,27 @@ class HostStateCoordinator:
             await self.broadcast_state(force=True)
             return None
 
+        if isinstance(msg, OpenMessage):
+            ok = await self._dispatch_open(msg)
+            if not ok:
+                return ErrorMessage(
+                    code="open_failed",
+                    message="Extensão Chrome desconectada ou não foi possível abrir a aba.",
+                    requestId=msg.requestId,
+                )
+            await self.broadcast_state(force=True)
+            return None
+
         return None
+
+    async def _dispatch_open(self, msg: OpenMessage) -> bool:
+        chrome = self._providers_by_source.get("chrome")
+        if chrome is None or not chrome.is_connected:
+            return False
+        open_fn = getattr(chrome, "open_in_browser", None)
+        if open_fn is None:
+            return False
+        return bool(await open_fn(mode=msg.mode, query=msg.query, url=msg.url))
 
     async def _dispatch_command(self, msg: CommandMessage) -> bool:
         if msg.sessionId == self._fallback_session_id:

@@ -25,18 +25,30 @@
 - **Fallback:** envio de teclas de mídia (play/pause, próximo, anterior, volume) quando um app não expuser sessão GSMTC (caso do VLC 3.x).
 
 ## Extensão do Chrome (MV3 — Fase 2)
-- Arquitetura Manifest V3 com **content script** (acesso direto ao `<video>` e `navigator.mediaSession` na página) + **service worker** (gerenciamento de abas e conexão WebSocket em `localhost` com o host).
-- Responsável por listar múltiplas abas de mídia (ex.: 2+ abas do YouTube) com título/canal/miniatura, controlar play/pause/seek por aba, ajustar **volume por aba** (via `video.volume` no content script e/ou silenciar aba no navegador), pular anúncios do YouTube quando o botão existir e abrir buscas/URLs a partir do celular.
+- Arquitetura Manifest V3 (`minimum_chrome_version: "116"`) em `extension/` com **service worker** (`service_worker.js`, `type: module`), **content script isolado** (`content_helpers.js` + `content.js`), **ponte no mundo MAIN** (`main_world_bridge.js`) e `popup.html` de diagnóstico local.
+- **ID fixo e segurança WebSocket (`Origin`):**
+  - `extension/manifest.json` fixa o ID da extensão (`dcnkokmkhlcocfengaobkeacnbdjdcfa`) via campo `"key"` (chave pública RSA-2048 SPKI em Base64, gerada sem chave privada no repositório). É possível recalcular/validar o ID a partir da `"key"` usando `host.config.extension_id_from_public_key_b64(key)` (ou sobrescrever no host com `--extension-id` / `PCMEDIA_EXTENSION_ID`).
+  - `/ws` valida o cabeçalho `Origin`, aceitando apenas a própria origem do host (`http://127.0.0.1:<porta>`, `http://localhost:<porta>`, `http://[::1]:<porta>` + `extra_ws_origins` na Fase 4).
+  - `/ws/extension` aceita apenas Peer localhost e `Origin: chrome-extension://<ID>`.
+- **Leitura de `navigator.mediaSession` (`ISOLATED` vs `MAIN` vs DOM):**
+  - Pela arquitetura de *isolated worlds* do Chromium, o content script padrão (`ISOLATED`) compartilha o DOM com a página, mas possui ambiente JS isolado; além disso, sites SPA como o YouTube inicializam ou atualizam `navigator.mediaSession.metadata` no mundo `MAIN` de forma assíncrona após navegação (`yt-navigate-finish`).
+  - Por isso a extensão sonda `navigator.mediaSession.metadata` no mundo `ISOLATED` (`probe.isolatedReadable`), lê o mundo `MAIN` via `main_world_bridge.js` (`window.postMessage` restrito a `window.location.origin`) e combina com **fallback/extrator DOM** (`ytd-watch-metadata`, `#channel-name`, miniaturas `i.ytimg.com/vi/<id>/hqdefault.jpg` para YouTube Watch/Shorts, YouTube Music, OpenGraph `<meta>` e `poster`/`document.title` em páginas genéricas). Em testes unitários Node e inspeção arquitetural o fluxo está validado; ao carregar no Chrome real, o popup/diagnóstico exibe em tempo real se `isolatedReadable` responde na sua versão do navegador.
+- **Comportamento do Service Worker MV3 ocioso (keepalive WebSocket):**
+  - No MV3, o Chrome encerra Service Workers ociosos após ~30 s; porém, desde o **Chrome 116+**, o envio/recebimento de quadros em um WebSocket aberto reinicia esse contador de inatividade.
+  - O `service_worker.js` envia `{"type": "ping", "ts": ...}` a cada **20 s** (abaixo dos 30 s) esperando `{"v": 1, "type": "pong"}` do host (com timeout de 10 s para detectar socket zumbi), complementado por `chrome.alarms` (1 min) e reconexão exponencial (1 s até 15 s). Round-trip `ping`/`pong` foi validado no host e testes automatizados; confirmação de permanência > 30 s em janela ociosa real do Chrome ocorre ao carregar a extensão em `chrome://extensions`.
+- Responsável por listar múltiplas abas com `<video>`/`<audio>` ou `mediaSession` (título, canal/artista, miniatura, status, posição/duração), controlar `play`/`pause`/`seek`/`±10s`/`next`/`previous`, ajustar **volume por aba** (`.volume` no elemento de mídia e silenciamento da aba via `chrome.tabs.update({ muted })`), **pular anúncio** clicando apenas no botão "Pular" visível/habilitado do YouTube (sem bloqueio de anúncios) e abrir busca do YouTube / URL (`http://`/`https://`) em nova aba.
 
 ## Protocolo (WebSocket, JSON)
 Servidor -> cliente:
-- `state`: lista unificada de sessões `{id, source, app, title, artist, status, position, duration, controls, volume?, muted?}` (com `id` incluindo a origem), sessão ativa, volume mestre e sessões de áudio por app (`audioSessions`)
-- `devices`/`error` quando aplicável
+- `state`: lista unificada de sessões `{id, source, app, appId, title, artist, album, artworkUrl, status, position, duration, controls: {play, pause, toggle, next, previous, seek, skipAd}, volume?, muted?, isSystemActive}`, sessão ativa, volume mestre e sessões de áudio por app (`audioSessions`)
+- `devices`/`error`/`pong` quando aplicável
 
 Cliente -> servidor:
-- `command`: `{sessionId, action: play|pause|toggle|next|previous|seek, value?}`
+- `command`: `{sessionId, action: play|pause|toggle|next|previous|seek|seek_relative|skip_ad, value?}`
 - `volume`: `{target: master|sessionId|appId, value?: 0..1, muted?: bool}`
 - `select`: `{sessionId}` escolher sessão ativa
+- `open`: `{mode: youtube_search|url, query?, url?}` abrir busca no YouTube ou URL `http(s)` em nova aba do Chrome
+- `ping`: `{requestId?}` keepalive (responde `pong`)
 
 Versionar o protocolo (`"v": 1`) desde o início.
 
@@ -74,3 +86,6 @@ Nada abaixo deve ser assumido como verdadeiro. Verificar na prática e registrar
 - **2026-11-11 (Pós-Fase 0) — Ambiente nativo Windows (`.venv`) e reordenação de fases:** Projeto roda diretamente no Windows com `.venv` (sem WSL; adapter/provedor específico do Windows), e a extensão Chrome é antecipada para a Fase 2 (antes do PWA) para consolidar o controle multi-aba na base do sistema.
 - **2026-11-11 (Fase 1) — Servidor `host/` em FastAPI + endpoints WS locais:** Servidor `host` (`127.0.0.1:8765`) expõe `/` (página mínima de teste), `/health`, `/api/state`, `/ws` (clientes de controle, Protocolo v1 validado com Pydantic) e `/ws/extension` (restrito a `localhost` para a extensão Chrome), com coleta de estado serializada por `asyncio.Lock` e loop de atualização ativo apenas quando há clientes conectados.
 - **2026-11-11 (Fase 1) — Executor COM dedicado para Core Audio (`pycaw`):** No `WindowsProvider`, chamadas `pycaw` rodam em `ThreadPoolExecutor` de thread única inicializada com `comtypes.CoInitialize()`, evitando falhas de apartamento COM entre threads do pool padrão do `asyncio`.
+- **2026-11-11 (Fase 2) — Validação estrita de `Origin` no WebSocket e ID fixo por `"key"`:** `/ws` rejeita origens fora do próprio host (preparado para `extra_ws_origins` na Fase 4) e `/ws/extension` aceita apenas `chrome-extension://<ID>`, com ID determinístico fixado pelo campo `"key"` (SPKI RSA-2048 público) em `extension/manifest.json`.
+- **2026-11-11 (Fase 2) — Leitura híbrida (`ISOLATED` + `MAIN` + DOM) e keepalive MV3 de 20 s:** Content script combina sonda `ISOLATED`, ponte `world: "MAIN"` via `window.postMessage` e seletores DOM (necessários para SPA do YouTube, capas `ytimg.com` e botão "Pular"); service worker mantém a conexão ativa com `ping`/`pong` a cada 20 s (`minimum_chrome_version: "116"`) + watchdog `chrome.alarms` de 1 min.
+- **2026-11-11 (Fase 2) — Extensões do Protocolo v1 para controle de abas Chrome:** Adicionados controle `skipAd` + ações `skip_ad` e `seek_relative` (`±10s`) em `command`, suporte a `ping`/`pong` em `/ws/extension`, e mensagem `open` (`youtube_search` / `url` validada em `http`/`https`) no `ChromeExtensionProvider`.
