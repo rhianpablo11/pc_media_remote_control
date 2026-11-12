@@ -24,12 +24,12 @@ Transformar o notebook (Windows) numa central de mídia controlada pelo celular,
 ## Convenções
 - Código, nomes e commits de código em inglês; documentação e mensagens de UI em português do Brasil.
 - Commits pequenos, mensagem no formato `fase-N: o que mudou`.
-- Python 3.12+, tipagem com type hints, `ruff` para lint, `pytest` para testes.
+- Ambiente Python 3.12+ nativo no Windows usando `.venv` (sem WSL); tipagem com type hints, `ruff` para lint, `pytest` para testes. A camada de adapter/provedor do sistema (`WindowsProvider`) é específica do Windows.
 - Cliente: React + TypeScript + Tailwind (Vite).
 - Estrutura de pastas sugerida (ajuste se tiver motivo, e registre):
   ```
   host/        # servidor Python (FastAPI)
   client/      # PWA React
-  extension/   # extensão Chrome (fase posterior)
+  extension/   # extensão Chrome MV3 (Fase 2)
   scripts/     # utilitários e spikes
   ```
