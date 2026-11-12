@@ -49,6 +49,10 @@ export function App() {
     selectSession,
     sendOpen,
     reconnectNow,
+    pairWithPin,
+    pairedDevices,
+    refreshPairedDevices,
+    revokeDevice,
   } = useMediaHost();
 
   const [activeTab, setActiveTab] = useState<ActiveTab>("now_playing");
@@ -130,7 +134,7 @@ export function App() {
         ) : null}
 
         {connectionStatus === "pairing_required" ? (
-          <PairingPlaceholder onRetry={reconnectNow} />
+          <PairingPlaceholder onRetry={reconnectNow} onPairWithPin={pairWithPin} />
         ) : activeTab === "now_playing" ? (
           <NowPlayingView
             session={activeSession}
@@ -158,6 +162,9 @@ export function App() {
             onOpen={sendOpen}
             onCommand={sendCommand}
             onReconnect={reconnectNow}
+            pairedDevices={pairedDevices}
+            onRefreshDevices={refreshPairedDevices}
+            onRevokeDevice={revokeDevice}
           />
         )}
       </main>

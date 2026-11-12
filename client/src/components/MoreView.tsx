@@ -1,5 +1,5 @@
-import { useState, type FormEvent } from "react";
-import type { ConnectionStatus, MediaAction, ThemeMode } from "../types";
+import { useEffect, useState, type FormEvent } from "react";
+import type { ConnectionStatus, MediaAction, PairedDevicePublic, ThemeMode } from "../types";
 import { NextIcon, PauseIcon, PlayIcon, PreviousIcon } from "./Icons";
 
 interface MoreViewProps {
@@ -10,6 +10,9 @@ interface MoreViewProps {
   onOpen: (mode: "youtube_search" | "url", payload: { query?: string; url?: string }) => boolean;
   onCommand: (sessionId: string, action: MediaAction) => void;
   onReconnect: () => void;
+  pairedDevices?: PairedDevicePublic[];
+  onRefreshDevices?: () => void;
+  onRevokeDevice?: (deviceId: string) => void;
 }
 
 const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
@@ -26,9 +29,19 @@ export function MoreView({
   onOpen,
   onCommand,
   onReconnect,
+  pairedDevices = [],
+  onRefreshDevices,
+  onRevokeDevice,
 }: MoreViewProps) {
   const [ytQuery, setYtQuery] = useState("");
   const [openUrl, setOpenUrl] = useState("");
+  const [revokingId, setRevokingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (onRefreshDevices) {
+      onRefreshDevices();
+    }
+  }, [onRefreshDevices]);
 
   const submitYoutube = (e: FormEvent) => {
     e.preventDefault();
@@ -45,6 +58,16 @@ export function MoreView({
     if (!trimmed) return;
     if (onOpen("url", { url: trimmed })) {
       setOpenUrl("");
+    }
+  };
+
+  const handleRevoke = async (id: string) => {
+    if (!onRevokeDevice) return;
+    setRevokingId(id);
+    try {
+      await onRevokeDevice(id);
+    } finally {
+      setRevokingId(null);
     }
   };
 
@@ -175,7 +198,7 @@ export function MoreView({
         </div>
       </section>
 
-      {/* 3. Conexão com o PC (Status de conexão exibido uma única vez com botão Reconectar) */}
+      {/* 3. Conexão com o PC */}
       <section className="card-surface flex items-center justify-between gap-3 p-5 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
         <div className="min-w-0">
           <h2 className="text-base font-semibold" style={{ color: "var(--text)" }}>
@@ -198,7 +221,64 @@ export function MoreView({
         </button>
       </section>
 
-      {/* 4. Aparência (Seletor de tema no fim) */}
+      {/* 4. Dispositivos Pareados */}
+      <section className="card-surface p-5 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
+        <div className="mb-2 flex items-center justify-between">
+          <h2 className="text-base font-semibold" style={{ color: "var(--text)" }}>
+            Dispositivos Pareados
+          </h2>
+          {onRefreshDevices ? (
+            <button
+              type="button"
+              onClick={onRefreshDevices}
+              className="touch-btn rounded-xl px-2.5 py-1 text-xs font-medium"
+              style={{ color: "var(--accent)" }}
+            >
+              Atualizar
+            </button>
+          ) : null}
+        </div>
+        <p className="mb-3 text-xs" style={{ color: "var(--text-secondary)" }}>
+          Aparelhos autorizados a controlar este PC na rede local.
+        </p>
+
+        {pairedDevices.length === 0 ? (
+          <p className="text-xs italic" style={{ color: "var(--text-secondary)" }}>
+            Nenhum outro aparelho registrado.
+          </p>
+        ) : (
+          <div className="flex flex-col divide-y divide-[var(--separator)]">
+            {pairedDevices.map((dev) => (
+              <div key={dev.id} className="flex items-center justify-between py-2.5 first:pt-0 last:pb-0">
+                <div className="min-w-0 flex-1 pr-3">
+                  <div className="truncate text-sm font-medium" style={{ color: "var(--text)" }}>
+                    {dev.name}
+                  </div>
+                  <div className="text-[11px]" style={{ color: "var(--text-secondary)" }}>
+                    {dev.lastSeenAt ? `Último acesso: ${dev.lastSeenAt.slice(0, 10)}` : "Ativo"}
+                  </div>
+                </div>
+                {onRevokeDevice ? (
+                  <button
+                    type="button"
+                    onClick={() => handleRevoke(dev.id)}
+                    disabled={revokingId === dev.id}
+                    className="touch-btn shrink-0 rounded-xl px-3 py-1.5 text-xs font-semibold transition-opacity disabled:opacity-40"
+                    style={{
+                      backgroundColor: "var(--surface-elevated)",
+                      color: "var(--danger)",
+                    }}
+                  >
+                    {revokingId === dev.id ? "Revogando..." : "Revogar"}
+                  </button>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* 5. Aparência */}
       <section className="card-surface p-5 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
         <h2 className="mb-3 text-base font-semibold" style={{ color: "var(--text)" }}>
           Aparência

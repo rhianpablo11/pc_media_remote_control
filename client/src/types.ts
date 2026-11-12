@@ -88,3 +88,10 @@ export type ConnectionStatus =
 
 export type ThemeMode = "auto" | "light" | "dark";
 export type ActiveTab = "now_playing" | "volume" | "more";
+
+export interface PairedDevicePublic {
+  id: string;
+  name: string;
+  createdAt: string;
+  lastSeenAt: string;
+}

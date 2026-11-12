@@ -187,8 +187,17 @@ class OpenMessage(BaseModel):
         return self
 
 
+class AuthMessage(BaseModel):
+    """Client -> server authentication handshake message."""
+
+    v: Literal[1] = 1
+    type: Literal["auth"] = "auth"
+    token: str
+    requestId: str | None = None
+
+
 ClientMessage = Annotated[
-    CommandMessage | VolumeMessage | SelectMessage | PingMessage | OpenMessage,
+    CommandMessage | VolumeMessage | SelectMessage | PingMessage | OpenMessage | AuthMessage,
     Field(discriminator="type"),
 ]
 _CLIENT_MESSAGE_ADAPTER: TypeAdapter[ClientMessage] = TypeAdapter(ClientMessage)

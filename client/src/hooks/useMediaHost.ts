@@ -3,12 +3,20 @@ import type {
   ConnectionStatus,
   ErrorMessage,
   MediaAction,
+  PairedDevicePublic,
   StateMessage,
 } from "../types";
 import {
   buildWebSocketUrl,
+  clearAuthToken,
+  clearPairingCodeFromUrl,
   computeReconnectDelayMs,
+  fetchPairedDevicesApi,
+  getPairingCodeFromUrl,
+  loadAuthToken,
   loadCachedState,
+  pairDeviceApi,
+  revokeDeviceApi,
   saveCachedState,
   triggerHaptic,
 } from "../utils";
@@ -25,6 +33,10 @@ export interface UseMediaHostResult {
   selectSession: (sessionId: string) => boolean;
   sendOpen: (mode: "youtube_search" | "url", payload: { query?: string; url?: string }) => boolean;
   reconnectNow: () => void;
+  pairWithPin: (pin: string) => Promise<{ ok: boolean; error?: string }>;
+  pairedDevices: PairedDevicePublic[];
+  refreshPairedDevices: () => Promise<void>;
+  revokeDevice: (deviceId: string) => Promise<boolean>;
 }
 
 const PAIRING_CLOSE_CODES = new Set([4001, 4401]);
@@ -36,6 +48,7 @@ export function useMediaHost(): UseMediaHostResult {
   const [receivedAtMs, setReceivedAtMs] = useState<number>(() => Date.now());
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("connecting");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [pairedDevices, setPairedDevices] = useState<PairedDevicePublic[]>([]);
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
@@ -43,6 +56,7 @@ export function useMediaHost(): UseMediaHostResult {
   const attemptRef = useRef<number>(0);
   const disposedRef = useRef<boolean>(false);
   const reqSeqRef = useRef<number>(0);
+  const pairingInProgressRef = useRef<boolean>(false);
 
   const showError = useCallback((msg: string) => {
     setErrorMessage(msg);
@@ -70,8 +84,26 @@ export function useMediaHost(): UseMediaHostResult {
     }
   }, []);
 
+  const refreshPairedDevices = useCallback(async () => {
+    const token = loadAuthToken();
+    const list = await fetchPairedDevicesApi(token);
+    setPairedDevices(list);
+  }, []);
+
+  const revokeDevice = useCallback(
+    async (deviceId: string): Promise<boolean> => {
+      const token = loadAuthToken();
+      const ok = await revokeDeviceApi(deviceId, token);
+      if (ok) {
+        await refreshPairedDevices();
+      }
+      return ok;
+    },
+    [refreshPairedDevices],
+  );
+
   const connect = useCallback(() => {
-    if (disposedRef.current) return;
+    if (disposedRef.current || pairingInProgressRef.current) return;
     clearReconnectTimer();
 
     const existing = wsRef.current;
@@ -100,6 +132,16 @@ export function useMediaHost(): UseMediaHostResult {
       }
       attemptRef.current = 0;
       setConnectionStatus("connected");
+
+      // Send auth frame immediately if a token exists
+      const token = loadAuthToken();
+      if (token) {
+        try {
+          socket.send(JSON.stringify({ v: 1, type: "auth", token }));
+        } catch {
+          // Socket might have closed
+        }
+      }
     };
 
     socket.onmessage = (event) => {
@@ -116,6 +158,7 @@ export function useMediaHost(): UseMediaHostResult {
         if (parsed.type === "error") {
           const errMsg = parsed as ErrorMessage;
           if (errMsg.code === "pairing_required") {
+            clearAuthToken();
             setConnectionStatus("pairing_required");
           }
           showError(errMsg.message || "Não foi possível concluir o comando.");
@@ -132,6 +175,7 @@ export function useMediaHost(): UseMediaHostResult {
       if (disposedRef.current) return;
 
       if (PAIRING_CLOSE_CODES.has(event.code)) {
+        clearAuthToken();
         setConnectionStatus("pairing_required");
         return;
       }
@@ -154,9 +198,48 @@ export function useMediaHost(): UseMediaHostResult {
     connect();
   }, [clearReconnectTimer, connect]);
 
+  const pairWithPin = useCallback(
+    async (pin: string): Promise<{ ok: boolean; error?: string }> => {
+      pairingInProgressRef.current = true;
+      try {
+        const res = await pairDeviceApi(pin);
+        if (!res.ok) {
+          showError(res.error || "Falha ao parear com o PIN informado.");
+          return { ok: false, error: res.error };
+        }
+        setConnectionStatus("connecting");
+        reconnectNow();
+        return { ok: true };
+      } finally {
+        pairingInProgressRef.current = false;
+      }
+    },
+    [reconnectNow, showError],
+  );
+
   useEffect(() => {
     disposedRef.current = false;
-    connect();
+
+    // Check URL for ?pair=<code> from QR code
+    const initialPairCode = getPairingCodeFromUrl();
+    if (initialPairCode) {
+      pairingInProgressRef.current = true;
+      clearPairingCodeFromUrl();
+      pairDeviceApi(initialPairCode)
+        .then((res) => {
+          if (res.ok) {
+            connect();
+          } else {
+            showError(res.error || "Código de pareamento inválido ou expirado.");
+            setConnectionStatus("pairing_required");
+          }
+        })
+        .finally(() => {
+          pairingInProgressRef.current = false;
+        });
+    } else {
+      connect();
+    }
 
     const handleResume = () => {
       if (document.visibilityState === "visible") {
@@ -192,7 +275,7 @@ export function useMediaHost(): UseMediaHostResult {
         wsRef.current = null;
       }
     };
-  }, [clearReconnectTimer, connect]);
+  }, [clearReconnectTimer, connect, showError]);
 
   const sendPayload = useCallback(
     (payload: Record<string, unknown>): boolean => {
@@ -278,5 +361,9 @@ export function useMediaHost(): UseMediaHostResult {
     selectSession,
     sendOpen,
     reconnectNow,
+    pairWithPin,
+    pairedDevices,
+    refreshPairedDevices,
+    revokeDevice,
   };
 }

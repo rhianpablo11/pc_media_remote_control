@@ -1,6 +1,6 @@
 # Fases — PC Media Control
 
-**Fase atual: 3**
+**Fase atual: 4**
 
 Regra: concluir a fase, marcar os checkboxes, commitar, parar e reportar. Só avançar quando o usuário autorizar.
 
@@ -45,14 +45,14 @@ Objetivo: descobrir o que o Windows realmente nos entrega, antes de construir qu
 **Aceite:** UI completa funcionando no notebook, no tamanho de tela de celular.
 
 ## Fase 4 — Rede, descoberta e pareamento
-- [ ] Host passa a escutar na LAN (somente rede privada) **junto com** o pareamento obrigatório
-- [ ] Filtrar adaptadores virtuais (Hyper-V/WSL/VPN) ao escolher o IP da LAN
-- [ ] Tratar o Perfil Público do firewall (orientar mudar Wi-Fi para Privada ou criar regra para executável/porta)
-- [ ] QR code exibido pelo host (janela ou terminal) com URL + token de uso único
-- [ ] Token de longa duração no cliente; lista de dispositivos autorizados no host, com revogação
-- [ ] Publicação mDNS (`_pcmedia._tcp`) e teste de resolução `.local` no Chrome do Android
-- [ ] Rejeição de comandos de dispositivos não pareados (com teste)
-- [ ] Guia curto no `README.md`: firewall (Perfil Público -> Privado), diagnóstico de Wi-Fi com isolamento de clientes (AP isolation) e plano B de hotspot
+- [x] Host passa a escutar na LAN (somente rede privada) **junto com** o pareamento obrigatório *(flag opt-in `--lan`, autenticação via primeiro frame WS ou Bearer HTTP, loopback mantido de confiança local)*
+- [x] Filtrar adaptadores virtuais (Hyper-V/WSL/VPN) ao escolher o IP da LAN *(módulo `host/network.py` filtra Hyper-V, WSL, VirtualBox, VMware, Tailscale, etc. e prioriza Wi-Fi/Ethernet físico)*
+- [x] Tratar o Perfil Público do firewall (orientar mudar Wi-Fi para Privada ou criar regra para executável/porta) *(script `scripts/allow_firewall.ps1` com regra `RemoteAddress LocalSubnet` + alerta no `python -m host doctor`)*
+- [x] QR code exibido pelo host (janela ou terminal) com URL + token de uso único *(impressão ASCII no terminal ao rodar com `--lan` e página `/pair` com QR vetorial SVG sem PIL e PIN numérico de 6 dígitos com expiração de 5 min e rate-limiting de 5 tentativas)*
+- [x] Token de longa duração no cliente; lista de dispositivos autorizados no host, com revogação *(store em `%LOCALAPPDATA%\PCMediaControl\devices.json` guardando apenas hash SHA-256; revogação fecha imediatamente conexões WS ativas com código 4001; UI de revogação na aba "Mais" do PWA e na página `/pair`)*
+- [x] Publicação mDNS (`_pcmedia._tcp`) e teste de resolução `.local` no Chrome do Android *(publicação assíncrona com `zeroconf` no lifespan do host; QR Code e PIN usam IP como rota primária e `.local` como alternativa)*
+- [x] Rejeição de comandos de dispositivos não pareados (com teste) *(16 testes automatizados em `tests/test_fase4_network_and_pairing.py` cobrindo rejeição de Origin, Host inválido [DNS rebinding], falta de token, token revogado e PIN inválido)*
+- [x] Guia curto no `README.md`: firewall (Perfil Público -> Privado), diagnóstico de Wi-Fi com isolamento de clientes (AP isolation) e plano B de hotspot *(guia completo no `README.md` com instruções de execução, firewall, perfil privado, diagnóstico e hotspot)*
 
 **Aceite:** do celular Android real, escaneio o QR, pareio e controlo o notebook; um segundo aparelho sem pareamento não consegue controlar nada.
 

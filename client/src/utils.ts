@@ -114,3 +114,109 @@ export function computeReconnectDelayMs(attempt: number): number {
   const safe = Math.max(0, attempt);
   return Math.min(12_000, 1000 * Math.pow(2, safe));
 }
+
+const AUTH_TOKEN_KEY = "pcmedia_auth_token_v1";
+const DEVICE_ID_KEY = "pcmedia_device_id_v1";
+
+export function loadAuthToken(): string | null {
+  try {
+    return localStorage.getItem(AUTH_TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function saveAuthToken(token: string, deviceId?: string): void {
+  try {
+    localStorage.setItem(AUTH_TOKEN_KEY, token);
+    if (deviceId) {
+      localStorage.setItem(DEVICE_ID_KEY, deviceId);
+    }
+  } catch {
+    // Ignore storage quota
+  }
+}
+
+export function clearAuthToken(): void {
+  try {
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+    localStorage.removeItem(DEVICE_ID_KEY);
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+export function getPairingCodeFromUrl(): string | null {
+  if (typeof window === "undefined" || !window.location.search) return null;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("pair");
+    return code ? code.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearPairingCodeFromUrl(): void {
+  if (typeof window === "undefined" || !window.history.replaceState) return;
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("pair");
+    window.history.replaceState({}, document.title, url.pathname + (url.search || ""));
+  } catch {
+    // Ignore history errors
+  }
+}
+
+export async function pairDeviceApi(
+  codeOrPin: string,
+  deviceName?: string,
+): Promise<{ ok: boolean; error?: string; token?: string; deviceId?: string }> {
+  try {
+    const resp = await fetch("/api/pair", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        code: codeOrPin.trim(),
+        deviceName: deviceName || (typeof navigator !== "undefined" ? navigator.userAgent.slice(0, 48) : "Celular"),
+      }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      return { ok: false, error: data.error || "Falha no pareamento." };
+    }
+    if (data.token) {
+      saveAuthToken(data.token, data.deviceId);
+      return { ok: true, token: data.token, deviceId: data.deviceId };
+    }
+    return { ok: false, error: "Resposta do servidor não continha token." };
+  } catch (err) {
+    return { ok: false, error: "Erro de conexão ao parear." };
+  }
+}
+
+export async function fetchPairedDevicesApi(token: string | null): Promise<any[]> {
+  try {
+    const headers: Record<string, string> = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const resp = await fetch("/api/devices", { headers });
+    if (!resp.ok) return [];
+    return await resp.json();
+  } catch {
+    return [];
+  }
+}
+
+export async function revokeDeviceApi(deviceId: string, token: string | null): Promise<boolean> {
+  try {
+    const headers: Record<string, string> = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const resp = await fetch(`/api/devices/${encodeURIComponent(deviceId)}`, {
+      method: "DELETE",
+      headers,
+    });
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}

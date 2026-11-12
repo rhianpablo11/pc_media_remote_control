@@ -1,19 +1,150 @@
-"""CLI entrypoint for running the local-only host server."""
+"""CLI entrypoint for running the host server and doctor diagnostics."""
 
 from __future__ import annotations
 
 import argparse
+import contextlib
+import json
 import os
+import socket
+import subprocess
 
 import uvicorn
 
 from host.app import create_app
 from host.config import DEFAULT_EXTENSION_ID, HostSettings
+from host.network import list_lan_interfaces, resolve_primary_lan_ip
+from host.pairing import PairingManager, render_qr_ascii
+
+
+def run_doctor(port: int = 8765) -> int:
+    """Run interactive network, firewall, and AP-isolation diagnostics."""
+    print("=" * 64)
+    print("        PC Media Control — Diagnóstico de Rede (Doctor)        ")
+    print("=" * 64)
+    print()
+
+    # 1. Interface and IP selection
+    print("[1/5] Adaptadores de rede detectados:")
+    interfaces = list_lan_interfaces()
+    chosen_ip, _ = resolve_primary_lan_ip(interfaces)
+
+    if not interfaces:
+        print("  [AVISO] Nenhum adaptador de rede IPv4 encontrado.")
+    else:
+        for iface in interfaces:
+            v_tag = "[VIRTUAL/VPN]" if iface.is_virtual else "[FÍSICO]"
+            p_tag = "Privado" if iface.is_private else "Público"
+            chosen_mark = "  <-- IP SELECIONADO" if iface.ip == chosen_ip else ""
+            print(f"  - {iface.name}: {iface.ip} {v_tag} ({p_tag}){chosen_mark}")
+
+    print(f"\n  IP principal da LAN: {chosen_ip}")
+    print()
+
+    # 2. Windows Network Profile (Public vs Private)
+    print("[2/5] Perfil da conexão no Windows (Public vs Private):")
+    is_public = False
+    try:
+        ps_cmd = (
+            "Get-NetConnectionProfile | "
+            "Select-Object Name, NetworkCategory, InterfaceAlias | "
+            "ConvertTo-Json -Compress"
+        )
+        res = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps_cmd],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            data = json.loads(res.stdout)
+            if isinstance(data, dict):
+                data = [data]
+            for item in data:
+                cat = item.get("NetworkCategory")
+                cat_name = "Público" if cat == 0 else ("Privado" if cat == 1 else "Domínio")
+                if cat == 0:
+                    is_public = True
+                print(f"  - {item.get('InterfaceAlias')} ({item.get('Name')}): {cat_name}")
+        else:
+            print("  Não foi possível consultar os perfis de rede via PowerShell.")
+    except Exception as exc:  # noqa: BLE001
+        print(f"  Erro ao consultar perfil de rede: {exc}")
+
+    if is_public:
+        print("  [ALERTA] Uma rede ativa está configurada como Perfil Público!")
+        print("           O Firewall do Windows bloqueia conexões de entrada em redes públicas.")
+        print("           Mude para rede Privada via Configurações ou comando:")
+        print("           Set-NetConnectionProfile -NetworkCategory Private")
+    else:
+        print("  [OK] Nenhuma rede física ativa detectada como Pública.")
+    print()
+
+    # 3. Windows Firewall Rules
+    print("[3/5] Regras no Firewall do Windows:")
+    try:
+        fw_cmd = (
+            "Get-NetFirewallRule -DisplayName '*PC Media Control*' -ErrorAction SilentlyContinue | "
+            "Select-Object DisplayName, Enabled, Direction, Action | "
+            "ConvertTo-Json -Compress"
+        )
+        rule_check = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", fw_cmd],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if rule_check.returncode == 0 and rule_check.stdout.strip():
+            rules_data = json.loads(rule_check.stdout)
+            if isinstance(rules_data, dict):
+                rules_data = [rules_data]
+            for r in rules_data:
+                name = r.get("DisplayName")
+                enabled = r.get("Enabled")
+                print(f"  [OK] Regra ativa encontrada: {name} (Habilitada: {enabled})")
+        else:
+            print("  [AVISO] Nenhuma regra com o nome 'PC Media Control' encontrada no Firewall.")
+            print("          Execute como Administrador: .\\scripts\\allow_firewall.ps1")
+    except Exception as exc:  # noqa: BLE001
+        print(f"  Erro ao inspecionar firewall: {exc}")
+    print()
+
+    # 4. Port Listening Check
+    print(f"[4/5] Verificação de escuta na porta {port}:")
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        res_code = sock.connect_ex(("127.0.0.1", port))
+        if res_code == 0:
+            print(f"  [OK] A porta {port} já está em uso (o host parece estar em execução).")
+        else:
+            print(f"  A porta {port} está livre (o host não está rodando no momento).")
+    print()
+
+    # 5. AP Isolation & Hotspot Guidance
+    print("[5/5] Isolamento de clientes (AP Isolation) & Plano B:")
+    print("  - Algumas redes Wi-Fi ativam 'AP Isolation', o que bloqueia o acesso local.")
+    print("  - Teste: tente abrir http://<ip_do_pc>:8765 no navegador do celular.")
+    print("    Se a página não carregar com o firewall liberado, a rede possui AP Isolation.")
+    print("  - Plano B (Hotspot): ative o 'Hotspot Móvel' do Windows ou do celular,")
+    print("    conecte ambos na mesma rede do hotspot e inicie o host normalmente com --lan.")
+    print("=" * 64)
+    return 0
 
 
 def main() -> int:
-    """Start the FastAPI host strictly bound to 127.0.0.1."""
-    parser = argparse.ArgumentParser(description="PC Media Control Host (localhost)")
+    """Start the FastAPI host strictly bound or on LAN with pairing."""
+    parser = argparse.ArgumentParser(description="PC Media Control Host")
+    subparsers = parser.add_subparsers(dest="subcommand")
+
+    # doctor subcommand
+    doctor_parser = subparsers.add_parser(
+        "doctor", help="Executa diagnóstico de rede, firewall e pareamento"
+    )
+    doctor_parser.add_argument(
+        "--port", type=int, default=8765, help="Porta a testar (padrão: 8765)"
+    )
+
+    # main server flags
     parser.add_argument("--port", type=int, default=8765, help="Porta HTTP/WS (padrão: 8765)")
     parser.add_argument(
         "--poll-interval",
@@ -25,6 +156,16 @@ def main() -> int:
         "--extension-id",
         default=os.environ.get("PCMEDIA_EXTENSION_ID", DEFAULT_EXTENSION_ID),
         help="ID autorizado da extensão Chrome para /ws/extension",
+    )
+    parser.add_argument(
+        "--lan",
+        action="store_true",
+        help="Habilita modo LAN: escuta em todas as interfaces com pareamento obrigatório",
+    )
+    parser.add_argument(
+        "--ip",
+        default=None,
+        help="Sobrescreve o IP da LAN informado no QR code e pareamento",
     )
     parser.add_argument(
         "--dev",
@@ -39,15 +180,58 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    if args.subcommand == "doctor":
+        return run_doctor(port=args.port)
+
+    lan_ip: str | None = None
+    bind_host = "127.0.0.1"
+    pairing_mgr = PairingManager()
+
+    if args.lan:
+        bind_host = "0.0.0.0"
+        interfaces = list_lan_interfaces()
+        lan_ip, candidates = resolve_primary_lan_ip(interfaces=interfaces, override_ip=args.ip)
+
+        physical_candidates = [c for c in candidates if not c.is_virtual]
+        if len(physical_candidates) > 1:
+            print("\n[Aviso] Múltiplos adaptadores de rede físicos encontrados:")
+            for cand in physical_candidates:
+                marker = " (ativo no QR)" if cand.ip == lan_ip else ""
+                print(f"  - {cand.name}: {cand.ip}{marker}")
+
+        session = pairing_mgr.get_or_create_pairing_session()
+        pairing_url = f"http://{lan_ip}:{args.port}/?pair={session.code}"
+
+        print("\n" + "=" * 58)
+        print("          PC MEDIA CONTROL — MODO LAN ATIVADO             ")
+        print("=" * 58)
+        print(f"IP da LAN:  {lan_ip}")
+        print(f"Porta:      {args.port}")
+        print(f"URL:        {pairing_url}")
+        print(f"PIN (6 dig): {session.pin[:3]} {session.pin[3:]}  (expira em 5 min)")
+        print(f"Pareamento: http://127.0.0.1:{args.port}/pair (apenas no PC)")
+        print("-" * 58)
+        print("Escaneie o QR Code abaixo com a câmera do celular:")
+        with contextlib.suppress(Exception):
+            print(render_qr_ascii(pairing_url))
+        print("=" * 58 + "\n")
+    else:
+        print(f"\nPC Media Control Host rodando em modo local: http://127.0.0.1:{args.port}")
+        print("Para acessar a partir do celular, reinicie com a flag --lan.\n")
+
     settings = HostSettings(
-        host="127.0.0.1",
+        host=bind_host,
         port=args.port,
         poll_interval_sec=args.poll_interval,
         extension_id=args.extension_id,
         dev_mode=args.dev,
         extra_ws_origins=tuple(args.allow_ws_origin),
+        lan_mode=args.lan,
+        lan_ip=lan_ip,
+        pairing_manager=pairing_mgr,
     )
-    app = create_app(settings=settings)
+
+    app = create_app(settings=settings, pairing_manager=pairing_mgr)
     uvicorn.run(app, host=settings.host, port=settings.port, log_level="info")
     return 0
 

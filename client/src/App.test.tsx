@@ -427,4 +427,56 @@ describe("App PWA", () => {
       url: "https://youtube.com/watch?v=123",
     });
   });
+
+  it("sends auth frame if token is stored in localStorage", () => {
+    localStorage.setItem("pcmedia_auth_token_v1", "test-auth-token-xyz");
+    render(<App />);
+    const ws = MockWebSocket.instances[0];
+    act(() => {
+      ws.simulateOpen();
+    });
+    expect(ws.sent.length).toBeGreaterThanOrEqual(1);
+    const firstMsg = JSON.parse(ws.sent[0]);
+    expect(firstMsg).toEqual({
+      v: 1,
+      type: "auth",
+      token: "test-auth-token-xyz",
+    });
+  });
+
+  it("handles pairing with 6-digit PIN when pairing is required", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        token: "tok-new-123",
+        deviceId: "dev_abc",
+        deviceName: "Celular Teste",
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+    const ws = MockWebSocket.instances[0];
+    act(() => {
+      ws.simulateOpen();
+      ws.simulateClose(4001);
+    });
+
+    expect(screen.getByText("Dispositivo não pareado")).toBeInTheDocument();
+
+    const pinInput = screen.getByLabelText("PIN de 6 dígitos");
+    fireEvent.change(pinInput, { target: { value: "123456" } });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Parear com PIN" }));
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/pair",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+    expect(localStorage.getItem("pcmedia_auth_token_v1")).toBe("tok-new-123");
+  });
 });
