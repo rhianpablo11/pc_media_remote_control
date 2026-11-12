@@ -59,23 +59,48 @@
     return el;
   }
 
-  function collectMediaElements() {
+  function collectMediaElements(returnDebug = false) {
     const elements = Array.from(document.querySelectorAll("video, audio"));
     const isYT = helpers.isYoutubeHost(window.location.hostname);
-    const wrapped = elements.map((el) => {
+    const wrapped = elements.map((el, index) => {
+      const activeReel = el.closest("ytd-reel-video-renderer[is-active]");
+      const anyReel = el.closest("ytd-reel-video-renderer");
+      const isYoutubeActiveReel = isYT && Boolean(activeReel);
+      const isYoutubeInactiveReel = isYT && Boolean(anyReel && !activeReel);
+      const isYoutubePreview = isYT && Boolean(el.closest("ytd-video-preview"));
       const isYoutubeMainVideo =
         isYT &&
-        Boolean(
-          el.closest("#movie_player") ||
-            el.classList.contains("html5-main-video") ||
-            el.closest("ytd-reel-video-renderer[is-active]")
-        );
-      const isYoutubePreview = isYT && Boolean(el.closest("ytd-video-preview"));
+        !isYoutubeInactiveReel &&
+        !isYoutubePreview &&
+        Boolean(el.closest("#movie_player") || el.classList.contains("html5-main-video"));
+
+      const style = window.getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      const isVisible =
+        Boolean(el.isConnected) &&
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        Number(style.opacity) !== 0 &&
+        rect.width > 0 &&
+        rect.height > 0;
+      const isInViewport =
+        isVisible &&
+        rect.bottom > 0 &&
+        rect.top < window.innerHeight &&
+        rect.right > 0 &&
+        rect.left < window.innerWidth;
+
       return {
+        index,
         element: el,
+        tag: el.tagName,
         isVideo: el.tagName === "VIDEO",
+        isYoutubeActiveReel,
+        isYoutubeInactiveReel,
         isYoutubeMainVideo,
         isYoutubePreview,
+        isVisible,
+        isInViewport,
         currentSrc: el.currentSrc || "",
         src: el.src || "",
         readyState: el.readyState || 0,
@@ -92,7 +117,28 @@
     }
 
     const best = helpers.selectPrimaryMediaCandidate(wrapped, isYT);
-    return best ? best.element : null;
+    const chosen = best ? best.element : null;
+    if (!returnDebug) {
+      return chosen;
+    }
+    return {
+      element: chosen,
+      debug: {
+        totalCandidates: wrapped.length,
+        selectedIndex: best ? best.index : null,
+        selectedInfo: best
+          ? {
+              tag: best.tag,
+              isYoutubeActiveReel: best.isYoutubeActiveReel,
+              isYoutubeInactiveReel: best.isYoutubeInactiveReel,
+              isVisible: best.isVisible,
+              isInViewport: best.isInViewport,
+              paused: best.paused,
+              muted: best.muted,
+            }
+          : null,
+      },
+    };
   }
 
   function readIsolatedMediaSession() {
@@ -318,7 +364,13 @@
   }
 
   async function executeMediaCommand(action, value) {
-    const mediaEl = collectMediaElements();
+    const { element: mediaEl, debug } = collectMediaElements(true);
+    console.debug("[PC Media Control] executeMediaCommand", {
+      action,
+      value,
+      url: window.location.href,
+      ...debug,
+    });
 
     if (action === "skip_ad") {
       const skipBtn = findClickableSkipAdButton();
@@ -444,8 +496,24 @@
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ["class", "style", "disabled", "aria-disabled", "src"],
+      attributeFilter: ["class", "style", "disabled", "aria-disabled", "src", "is-active"],
     });
+  }
+
+  // Document-level capture ensures newly mounted Shorts <video> elements report
+  // play/pause transitions immediately before MutationObserver attaches listeners.
+  for (const evt of ["play", "playing", "pause", "ended", "seeked", "volumechange", "loadedmetadata"]) {
+    document.addEventListener(
+      evt,
+      (event) => {
+        const target = event.target;
+        if (target && (target.tagName === "VIDEO" || target.tagName === "AUDIO")) {
+          attachElementListeners(target);
+          sendSnapshot(true);
+        }
+      },
+      true
+    );
   }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {

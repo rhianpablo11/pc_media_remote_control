@@ -186,6 +186,9 @@
     let ws = null;
     let reconnectTimer = null;
     let isDragging = false;
+    let isPointerDown = false;
+    let pendingState = null;
+    let lastSessionsStructureKey = "";
 
     const connBadge = document.getElementById("conn-badge");
     const extBadge = document.getElementById("ext-badge");
@@ -286,6 +289,17 @@
       }
     });
 
+    document.addEventListener("pointerdown", () => { isPointerDown = true; });
+    document.addEventListener("pointerup", () => {
+      isPointerDown = false;
+      if (!isDragging && pendingState) {
+        const next = pendingState;
+        pendingState = null;
+        renderState(next);
+      }
+    });
+    document.addEventListener("pointercancel", () => { isPointerDown = false; });
+
     document.addEventListener("mousedown", (e) => {
       if (e.target.matches('input[type="range"]')) isDragging = true;
     });
@@ -314,6 +328,24 @@
       }
     });
 
+    function sessionsStructureKey(state) {
+      return JSON.stringify({
+        activeSessionId: state.activeSessionId,
+        sessions: (state.sessions || []).map((s) => ({
+          id: s.id,
+          source: s.source,
+          title: s.title,
+          artist: s.artist,
+          artworkUrl: s.artworkUrl,
+          status: s.status,
+          duration: Math.round(s.duration || 0),
+          volume: s.volume,
+          muted: s.muted,
+          controls: s.controls,
+        })),
+      });
+    }
+
     function renderState(state) {
       extBadge.textContent = state.extensionConnected
         ? "Extensão Chrome: conectada"
@@ -322,9 +354,24 @@
       ytSearchBtn.disabled = !state.extensionConnected;
       openUrlBtn.disabled = !state.extensionConnected;
 
+      const structKey = sessionsStructureKey(state);
       if (!state.sessions || state.sessions.length === 0) {
-        sessionsList.innerHTML = `<div class="meta-sub">Nenhuma sessão de mídia ativa encontrada.</div>`;
+        if (lastSessionsStructureKey !== "__empty__") {
+          lastSessionsStructureKey = "__empty__";
+          sessionsList.innerHTML = `<div class="meta-sub">Nenhuma sessão de mídia ativa encontrada.</div>`;
+        }
+      } else if (structKey === lastSessionsStructureKey) {
+        // Update progress bar & timestamps in-place so buttons stay intact during clicks
+        for (const s of state.sessions) {
+          const dur = Math.max(0, s.duration || 0);
+          const pos = Math.min(dur || s.position || 0, Math.max(0, s.position || 0));
+          const slider = sessionsList.querySelector(`input[data-seek-session="${CSS.escape(s.id)}"]`);
+          if (slider) slider.value = String(pos);
+          const label = sessionsList.querySelector(`[data-time-session="${CSS.escape(s.id)}"]`);
+          if (label) label.textContent = `${fmtTime(pos)} / ${fmtTime(dur)}`;
+        }
       } else {
+        lastSessionsStructureKey = structKey;
         sessionsList.innerHTML = state.sessions.map((s) => {
           const isActive = s.id === state.activeSessionId;
           const dur = Math.max(0, s.duration || 0);
@@ -374,7 +421,7 @@
                 <input type="range" min="0" max="${dur || 100}" step="1" value="${pos}"
                   data-seek-session="${escapeHtml(s.id)}"
                   ${s.controls && s.controls.seek && dur > 0 ? "" : "disabled"} />
-                <span class="meta-sub">${fmtTime(pos)} / ${fmtTime(dur)}</span>
+                <span class="meta-sub" data-time-session="${escapeHtml(s.id)}">${fmtTime(pos)} / ${fmtTime(dur)}</span>
               </div>
               ${tabVolHtml}
               <div class="controls">
@@ -444,7 +491,12 @@
       ws.onmessage = (event) => {
         const msg = JSON.parse(event.data);
         if (msg.type === "state") {
-          if (!isDragging) renderState(msg);
+          if (isDragging || isPointerDown) {
+            pendingState = msg;
+          } else {
+            pendingState = null;
+            renderState(msg);
+          }
         } else if (msg.type === "error") {
           showError(msg.message || "Erro ao processar comando.");
         }

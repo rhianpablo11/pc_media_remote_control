@@ -85,6 +85,8 @@ test("selectPrimaryMediaCandidate skips YouTube hover preview videos and picks m
         isVideo: true,
         isYoutubeMainVideo: false,
         isYoutubePreview: true,
+        isVisible: true,
+        isInViewport: true,
         paused: false,
         ended: false,
         readyState: 4,
@@ -96,6 +98,8 @@ test("selectPrimaryMediaCandidate skips YouTube hover preview videos and picks m
         isVideo: true,
         isYoutubeMainVideo: true,
         isYoutubePreview: false,
+        isVisible: true,
+        isInViewport: true,
         paused: true,
         ended: false,
         readyState: 4,
@@ -106,6 +110,60 @@ test("selectPrimaryMediaCandidate skips YouTube hover preview videos and picks m
     true
   );
   assert.equal(selected.id, "main-player");
+});
+
+test("selectPrimaryMediaCandidate in YouTube Shorts prefers visible active reel over hidden/preloaded videos", () => {
+  const selected = contentHelpers.selectPrimaryMediaCandidate(
+    [
+      {
+        id: "hidden-watch-or-prev-reel",
+        isVideo: true,
+        isYoutubeActiveReel: false,
+        isYoutubeInactiveReel: true,
+        isYoutubeMainVideo: true,
+        isVisible: false,
+        isInViewport: false,
+        paused: false,
+        muted: true,
+        ended: false,
+        readyState: 4,
+        currentSrc: "blob:old-short",
+        duration: 30,
+      },
+      {
+        id: "active-visible-short",
+        isVideo: true,
+        isYoutubeActiveReel: true,
+        isYoutubeInactiveReel: false,
+        isYoutubeMainVideo: false,
+        isVisible: true,
+        isInViewport: true,
+        paused: false,
+        muted: false,
+        volume: 1,
+        ended: false,
+        readyState: 2,
+        currentSrc: "blob:active-short",
+        duration: 45,
+      },
+      {
+        id: "preloaded-next-reel",
+        isVideo: true,
+        isYoutubeActiveReel: false,
+        isYoutubeInactiveReel: true,
+        isYoutubeMainVideo: true,
+        isVisible: false,
+        isInViewport: false,
+        paused: true,
+        ended: false,
+        readyState: 4,
+        currentSrc: "blob:next-short",
+        duration: 20,
+      },
+    ],
+    true
+  );
+  assert.equal(selected.id, "active-visible-short");
 });
 
 test("computeSeekTarget handles +10s/-10s clamped seek", () => {

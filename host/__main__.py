@@ -26,6 +26,17 @@ def main() -> int:
         default=os.environ.get("PCMEDIA_EXTENSION_ID", DEFAULT_EXTENSION_ID),
         help="ID autorizado da extensão Chrome para /ws/extension",
     )
+    parser.add_argument(
+        "--dev",
+        action="store_true",
+        help="Modo dev: autoriza origens do Vite (http://localhost:5173) no /ws",
+    )
+    parser.add_argument(
+        "--allow-ws-origin",
+        action="append",
+        default=[],
+        help="Origem extra autorizada no /ws (pode repetir)",
+    )
     args = parser.parse_args()
 
     settings = HostSettings(
@@ -33,6 +44,8 @@ def main() -> int:
         port=args.port,
         poll_interval_sec=args.poll_interval,
         extension_id=args.extension_id,
+        dev_mode=args.dev,
+        extra_ws_origins=tuple(args.allow_ws_origin),
     )
     app = create_app(settings=settings)
     uvicorn.run(app, host=settings.host, port=settings.port, log_level="info")

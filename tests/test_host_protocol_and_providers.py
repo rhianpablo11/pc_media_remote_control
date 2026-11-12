@@ -564,3 +564,123 @@ def test_websocket_origin_validation_rejects_invalid_and_missing_origins() -> No
                 "/ws/extension", headers=bad_ext_headers
             ):
                 pass
+
+
+def test_dev_mode_gates_vite_websocket_origin() -> None:
+    default_settings = HostSettings(host="127.0.0.1", port=8765, poll_interval_sec=60.0)
+    assert "http://localhost:5173" not in default_settings.get_allowed_ws_origins()
+    assert "http://127.0.0.1:5173" not in default_settings.get_allowed_ws_origins()
+
+    win = FakeWindowsProvider()
+    ext = ChromeExtensionProvider()
+    prod_app = create_app(
+        settings=default_settings,
+        providers=[ext, win],
+        audio_provider=win,
+        chrome_provider=ext,
+    )
+    with TestClient(prod_app) as client:
+        for dev_origin in ("http://localhost:5173", "http://127.0.0.1:5173"):
+            with pytest.raises((WebSocketDisconnect, Exception)), client.websocket_connect(
+                "/ws", headers={"origin": dev_origin}
+            ):
+                pass
+
+    dev_settings = HostSettings(
+        host="127.0.0.1",
+        port=8765,
+        poll_interval_sec=60.0,
+        dev_mode=True,
+    )
+    assert "http://localhost:5173" in dev_settings.get_allowed_ws_origins()
+    dev_app = create_app(
+        settings=dev_settings,
+        providers=[ext, win],
+        audio_provider=win,
+        chrome_provider=ext,
+    )
+    with TestClient(dev_app) as client, client.websocket_connect(
+        "/ws", headers={"origin": "http://localhost:5173"}
+    ) as ws:
+        assert ws.receive_json()["type"] == "state"
+
+
+def test_host_serves_client_dist_and_prevents_path_traversal(tmp_path: Path) -> None:
+    dist_dir = tmp_path / "dist"
+    (dist_dir / "assets").mkdir(parents=True)
+    (dist_dir / "icons").mkdir(parents=True)
+    (dist_dir / "index.html").write_text("<html><body>PWA BUILD OK</body></html>", encoding="utf-8")
+    (dist_dir / "manifest.webmanifest").write_text('{"name":"PC Media Control"}', encoding="utf-8")
+    (dist_dir / "sw.js").write_text("// sw", encoding="utf-8")
+    (dist_dir / "favicon.svg").write_text("<svg></svg>", encoding="utf-8")
+    (dist_dir / "assets" / "app.js").write_text("console.log('ok');", encoding="utf-8")
+    (dist_dir / "icons" / "icon-192.png").write_bytes(b"pngbytes")
+    (tmp_path / "secret.txt").write_text("do-not-leak", encoding="utf-8")
+
+    win = FakeWindowsProvider()
+    ext = ChromeExtensionProvider()
+    app = create_app(
+        settings=HostSettings(poll_interval_sec=60.0, client_dist_dir=dist_dir),
+        providers=[ext, win],
+        audio_provider=win,
+        chrome_provider=ext,
+    )
+
+    with TestClient(app) as client:
+        root_resp = client.get("/")
+        assert root_resp.status_code == 200
+        assert "PWA BUILD OK" in root_resp.text
+
+        legacy_resp = client.get("/legacy-test")
+        assert legacy_resp.status_code == 200
+        assert "PC Media Control" in legacy_resp.text
+
+        manifest_resp = client.get("/manifest.webmanifest")
+        assert manifest_resp.status_code == 200
+        assert "application/manifest+json" in manifest_resp.headers["content-type"]
+
+        assert client.get("/sw.js").status_code == 200
+        assert client.get("/favicon.svg").status_code == 200
+        assert client.get("/assets/app.js").status_code == 200
+        assert client.get("/icons/icon-192.png").content == b"pngbytes"
+        assert client.get("/assets/../../secret.txt").status_code == 404
+
+    fallback_app = create_app(
+        settings=HostSettings(poll_interval_sec=60.0, client_dist_dir=tmp_path / "missing"),
+        providers=[ext, win],
+        audio_provider=win,
+        chrome_provider=ext,
+    )
+    with TestClient(fallback_app) as client:
+        fallback_resp = client.get("/")
+        assert fallback_resp.status_code == 200
+        assert "PC Media Control" in fallback_resp.text
+
+
+def test_dispatch_command_logs_host_session_status(caplog: pytest.LogCaptureFixture) -> None:
+    win = FakeWindowsProvider()
+    ext = ChromeExtensionProvider()
+    coordinator = HostStateCoordinator(providers=[ext, win], audio_provider=win)
+
+    async def _run() -> Any:
+        await coordinator.build_state()
+        return await coordinator.handle_raw_client_message(
+            {
+                "v": 1,
+                "type": "command",
+                "sessionId": "windows:Spotify.exe:0",
+                "action": "pause",
+            }
+        )
+
+    with caplog.at_level("INFO", logger="host.state"):
+        reply = asyncio.run(_run())
+
+    assert reply is None
+    assert any(
+        "action=pause" in rec.message
+        and "session=windows:Spotify.exe:0" in rec.message
+        and "status_host=PLAYING" in rec.message
+        and "ativa=None" in rec.message
+        for rec in caplog.records
+    )

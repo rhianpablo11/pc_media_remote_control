@@ -1,6 +1,6 @@
 # Fases — PC Media Control
 
-**Fase atual: 2**
+**Fase atual: 3**
 
 Regra: concluir a fase, marcar os checkboxes, commitar, parar e reportar. Só avançar quando o usuário autorizar.
 
@@ -35,12 +35,12 @@ Objetivo: descobrir o que o Windows realmente nos entrega, antes de construir qu
 **Aceite:** com 2+ abas do YouTube tocando, controlo reprodução e volume de cada aba individualmente, pulo anúncio e abro vídeo novo sem tocar no notebook (sem duplicar sessões do `chrome.exe` no host).
 
 ## Fase 3 — Cliente PWA
-- [ ] Projeto `client/` (Vite + React + TS + Tailwind) seguindo `DESIGN.md`
-- [ ] Telas: Tocando agora, seletor de sessão, volume geral / por app / por aba
-- [ ] Temas claro/escuro/automático
-- [ ] Reconexão automática e estados de erro
-- [ ] Host serve o build estático do cliente
-- [ ] Manifest + ícones (instalável)
+- [x] Projeto `client/` (Vite + React + TS + Tailwind) seguindo `DESIGN.md`
+- [x] Telas: Tocando agora, seletor de sessão, volume geral / por app / por aba *(e aba Mais com ações da extensão, teclas globais de fallback e seleção de tema)*
+- [x] Temas claro/escuro/automático *(variáveis CSS em `client/src/index.css` com `prefers-color-scheme` e troca manual persistida)*
+- [x] Reconexão automática e estados de erro *(reconexão exponencial + retomada em `visibilitychange`/`online`, estado offline com último cache, tela de não pareado e toast de erro)*
+- [x] Host serve o build estático do cliente *(servindo `client/dist/` em `/` com fallback em `/legacy-test` e origem Vite liberada só em `--dev`)*
+- [x] Manifest + ícones (instalável) *(`manifest.webmanifest`, ícones PNG `192`/`512`/`apple-touch-icon` e `sw.js` incluídos; ressalva de atalho via HTTP na LAN documentada em `ARQUITETURA.md`)*
 
 **Aceite:** UI completa funcionando no notebook, no tamanho de tela de celular.
 

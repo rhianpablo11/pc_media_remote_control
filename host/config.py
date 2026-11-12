@@ -6,9 +6,12 @@ import base64
 import hashlib
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from urllib.parse import urlsplit
 
 DEFAULT_EXTENSION_ID = "dcnkokmkhlcocfengaobkeacnbdjdcfa"
+DEFAULT_CLIENT_DIST_DIR = Path(__file__).resolve().parent.parent / "client" / "dist"
+DEFAULT_DEV_WS_ORIGINS = ("http://localhost:5173", "http://127.0.0.1:5173")
 
 
 def extension_id_from_public_key_b64(key_b64: str) -> str:
@@ -45,6 +48,8 @@ class HostSettings:
     extension_id: str = os.environ.get("PCMEDIA_EXTENSION_ID", DEFAULT_EXTENSION_ID)
     allowed_ws_origins: tuple[str, ...] | None = None
     extra_ws_origins: tuple[str, ...] = ()
+    dev_mode: bool = False
+    client_dist_dir: Path = DEFAULT_CLIENT_DIST_DIR
 
     def get_allowed_ws_origins(self) -> set[str]:
         """Return normalized Origin values permitted to connect to /ws."""
@@ -58,7 +63,10 @@ class HostSettings:
                 f"http://localhost{default_port_suffix}",
                 f"http://[::1]{default_port_suffix}",
             )
-        normalized = {normalize_origin(item) for item in (*base, *self.extra_ws_origins)}
+        dev_origins = DEFAULT_DEV_WS_ORIGINS if self.dev_mode else ()
+        normalized = {
+            normalize_origin(item) for item in (*base, *dev_origins, *self.extra_ws_origins)
+        }
         normalized.discard("")
         return normalized
 

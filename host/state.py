@@ -71,6 +71,7 @@ class HostStateCoordinator:
         self._selected_session_id: str | None = None
         self._clients: set[WebSocket] = set()
         self._last_state_json: str | None = None
+        self._last_session_statuses: dict[str, str] = {}
         self._state_lock = asyncio.Lock()
 
     @property
@@ -140,6 +141,7 @@ class HostStateCoordinator:
             unified_sessions.append(sess)
 
         active_id = self._resolve_active_session_id(unified_sessions)
+        self._last_session_statuses = {s.id: s.status for s in unified_sessions}
 
         return StateMessage(
             sessions=[session_to_payload(s) for s in unified_sessions],
@@ -268,6 +270,14 @@ class HostStateCoordinator:
         return bool(await open_fn(mode=msg.mode, query=msg.query, url=msg.url))
 
     async def _dispatch_command(self, msg: CommandMessage) -> bool:
+        known_status = self._last_session_statuses.get(msg.sessionId, "UNKNOWN")
+        logger.info(
+            "Despachando comando action=%s session=%s (status_host=%s, ativa=%s)",
+            msg.action,
+            msg.sessionId,
+            known_status,
+            self._selected_session_id,
+        )
         if msg.sessionId == self._fallback_session_id:
             return await self._audio_provider.send_media_key(msg.action)
 

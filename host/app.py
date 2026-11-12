@@ -9,8 +9,8 @@ import logging
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
 from host.config import HostSettings, normalize_origin
 from host.protocol import ErrorMessage
@@ -22,6 +22,20 @@ from host.state import HostStateCoordinator
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 LOCALHOST_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
 logger = logging.getLogger(__name__)
+
+
+def _serve_dist_file(
+    dist_dir: Path,
+    rel_path: str,
+    media_type: str | None = None,
+    cache_control: str | None = None,
+) -> FileResponse:
+    root = dist_dir.resolve()
+    target = (root / rel_path).resolve()
+    if not target.is_relative_to(root) or not target.is_file():
+        raise HTTPException(status_code=404, detail="Arquivo estático não encontrado.")
+    headers = {"Cache-Control": cache_control} if cache_control else None
+    return FileResponse(target, media_type=media_type, headers=headers)
 
 
 def create_app(
@@ -80,10 +94,52 @@ def create_app(
     app.state.chrome_provider = ext_provider
     app.state.settings = cfg
 
-    @app.get("/", response_class=HTMLResponse)
-    async def index() -> HTMLResponse:
+    @app.get("/", response_model=None)
+    async def index() -> Response:
+        dist_index = cfg.client_dist_dir / "index.html"
+        if dist_index.is_file():
+            return FileResponse(dist_index, headers={"Cache-Control": "no-cache"})
         html_path = STATIC_DIR / "index.html"
         return HTMLResponse(html_path.read_text(encoding="utf-8"))
+
+    @app.get("/legacy-test", response_class=HTMLResponse)
+    async def legacy_test_page() -> HTMLResponse:
+        html_path = STATIC_DIR / "index.html"
+        return HTMLResponse(html_path.read_text(encoding="utf-8"))
+
+    @app.get("/manifest.webmanifest")
+    async def web_manifest() -> FileResponse:
+        return _serve_dist_file(
+            cfg.client_dist_dir,
+            "manifest.webmanifest",
+            media_type="application/manifest+json",
+            cache_control="no-cache",
+        )
+
+    @app.get("/sw.js")
+    async def service_worker_js() -> FileResponse:
+        return _serve_dist_file(
+            cfg.client_dist_dir,
+            "sw.js",
+            media_type="application/javascript",
+            cache_control="no-cache",
+        )
+
+    @app.get("/favicon.svg")
+    async def favicon_svg() -> FileResponse:
+        return _serve_dist_file(
+            cfg.client_dist_dir,
+            "favicon.svg",
+            media_type="image/svg+xml",
+        )
+
+    @app.get("/assets/{asset_path:path}")
+    async def client_assets(asset_path: str) -> FileResponse:
+        return _serve_dist_file(cfg.client_dist_dir, f"assets/{asset_path}")
+
+    @app.get("/icons/{icon_path:path}")
+    async def client_icons(icon_path: str) -> FileResponse:
+        return _serve_dist_file(cfg.client_dist_dir, f"icons/{icon_path}")
 
     @app.get("/health")
     async def health() -> JSONResponse:

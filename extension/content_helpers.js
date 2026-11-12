@@ -125,27 +125,55 @@
     if (!hasSource && candidate.paused) return -1;
 
     let score = 0;
-    if (isYouTube && candidate.isYoutubeMainVideo) score += 1000;
-    if (isYouTube && candidate.isYoutubePreview) score -= 2000;
-    if (!candidate.paused && !candidate.ended) score += 500;
+    if (isYouTube && candidate.isYoutubePreview) {
+      score -= 2500;
+    }
+    if (isYouTube && candidate.isYoutubeInactiveReel) {
+      score -= 1800;
+    }
+    if (isYouTube && candidate.isYoutubeActiveReel) {
+      score += 1400;
+    } else if (isYouTube && candidate.isYoutubeMainVideo) {
+      score += 900;
+    }
+
+    if (candidate.isVisible === true) {
+      score += 800;
+    } else if (candidate.isVisible === false) {
+      score -= 1500;
+    }
+    if (candidate.isInViewport === true) {
+      score += 400;
+    }
+
+    if (!candidate.paused && !candidate.ended) score += 600;
     if (candidate.readyState >= 2) score += 100;
     if (candidate.isVideo) score += 50;
     if (Number.isFinite(candidate.duration) && candidate.duration > 0) score += 25;
-    if (!candidate.muted && candidate.volume > 0) score += 10;
+    if (!candidate.muted && candidate.volume > 0) score += 120;
     return score;
   }
 
   function selectPrimaryMediaCandidate(candidates, isYouTube) {
     let best = null;
-    let bestScore = -1;
+    let bestScore = -Infinity;
     for (const item of candidates || []) {
       const score = scoreMediaCandidate(item, isYouTube);
-      if (score > bestScore) {
+      if (score >= 0 && score > bestScore) {
         bestScore = score;
         best = item;
       }
     }
-    return best;
+    if (best !== null) {
+      return best;
+    }
+    // Fallback if every candidate scored negative (e.g. offscreen audio/video playing)
+    for (const item of candidates || []) {
+      if (item && !item.paused && !item.ended) {
+        return item;
+      }
+    }
+    return null;
   }
 
   function computeSeekTarget(currentTime, duration, value, relative = false) {
