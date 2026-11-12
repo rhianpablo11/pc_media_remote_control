@@ -17,10 +17,10 @@ Objetivo: descobrir o que o Windows realmente nos entrega, antes de construir qu
 **Aceite:** hipóteses respondidas com evidência; plano ajustado com base nos resultados.
 
 ## Fase 1 — Host núcleo + provedores (Windows)
-- [ ] Projeto `host/` com FastAPI + WebSocket, escutando só em `127.0.0.1`
-- [ ] Abstração de provedores de sessão (`SessionProvider`): `WindowsProvider` (GSMTC + `pycaw` + fallback de teclas de mídia para Spotify, VLC e demais apps) e `ChromeExtensionProvider` (unificando sessões numa lista com `id` contendo a origem e ocultando sessões GSMTC de `chrome.exe` quando a extensão estiver conectada)
-- [ ] Protocolo v1 (`state`/`command`/`volume`/`select`) com testes automatizados (provedor simulado nos testes)
-- [ ] Cliente de teste em linha de comando ou página mínima
+- [x] Projeto `host/` com FastAPI + WebSocket, escutando só em `127.0.0.1`
+- [x] Abstração de provedores de sessão (`SessionProvider`): `WindowsProvider` (GSMTC + `pycaw` + fallback de teclas de mídia para Spotify, VLC e demais apps) e `ChromeExtensionProvider` (unificando sessões numa lista com `id` contendo a origem e ocultando sessões GSMTC de `chrome.exe` quando a extensão estiver conectada)
+- [x] Protocolo v1 (`state`/`command`/`volume`/`select`) com testes automatizados (provedor simulado nos testes)
+- [x] Cliente de teste em linha de comando ou página mínima *(página mínima servida em `/` via `host/static/index.html`)*
 
 **Aceite:** pelo navegador do próprio notebook, consigo ver sessões unificadas e controlar mídia e volume.
 

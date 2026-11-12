@@ -1,0 +1,414 @@
+"""Unit and integration tests for Fase 1 host, Protocol v1, and session providers."""
+
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+
+import pytest
+from fastapi.testclient import TestClient
+from pydantic import ValidationError
+
+from host.app import create_app
+from host.config import HostSettings
+from host.protocol import (
+    CommandMessage,
+    PingMessage,
+    SelectMessage,
+    VolumeMessage,
+    parse_client_message,
+)
+from host.providers.base import (
+    AudioAppInfo,
+    MasterVolumeInfo,
+    MediaAction,
+    MediaSessionInfo,
+    PlaybackControls,
+)
+from host.providers.chrome_extension import ChromeExtensionProvider
+from host.providers.windows import (
+    friendly_app_name,
+    parse_windows_session_id,
+)
+from host.state import HostStateCoordinator
+
+
+class FakeWindowsProvider:
+    """In-memory mock of WindowsProvider for fast deterministic tests."""
+
+    def __init__(self) -> None:
+        self.sessions: list[MediaSessionInfo] = [
+            MediaSessionInfo(
+                id="windows:Spotify.exe:0",
+                source="windows",
+                app="Spotify",
+                app_id="Spotify.exe",
+                title="Música Teste",
+                artist="Artista Teste",
+                status="PLAYING",
+                position=12.0,
+                duration=180.0,
+                controls=PlaybackControls(
+                    play=False, pause=True, toggle=True, next=True, previous=True, seek=True
+                ),
+                is_system_active=True,
+            ),
+            MediaSessionInfo(
+                id="windows:chrome.exe:0",
+                source="windows",
+                app="Google Chrome",
+                app_id="chrome.exe",
+                title="YouTube GSMTC Agregado",
+                artist="Canal",
+                status="PAUSED",
+                position=5.0,
+                duration=300.0,
+                controls=PlaybackControls(play=True, pause=False, toggle=True, seek=True),
+            ),
+        ]
+        self.master = MasterVolumeInfo(level=0.4, muted=False, device_name="Fone Fake")
+        self.audio_apps: list[AudioAppInfo] = [
+            AudioAppInfo(
+                id="windows-audio:Spotify.exe",
+                source="windows",
+                app="Spotify",
+                process_name="Spotify.exe",
+                pid=101,
+                active=True,
+                volume=0.8,
+                muted=False,
+            ),
+            AudioAppInfo(
+                id="windows-audio:vlc.exe",
+                source="windows",
+                app="VLC",
+                process_name="vlc.exe",
+                pid=202,
+                active=False,
+                volume=0.5,
+                muted=False,
+            ),
+        ]
+        self.executed_commands: list[tuple[str, MediaAction, float | None]] = []
+        self.media_keys_sent: list[MediaAction] = []
+
+    @property
+    def source(self) -> str:
+        return "windows"
+
+    @property
+    def is_connected(self) -> bool:
+        return True
+
+    async def list_sessions(self) -> list[MediaSessionInfo]:
+        return list(self.sessions)
+
+    async def execute_command(
+        self,
+        session_id: str,
+        action: MediaAction,
+        value: float | None = None,
+    ) -> bool:
+        if not any(s.id == session_id for s in self.sessions):
+            return False
+        self.executed_commands.append((session_id, action, value))
+        return True
+
+    async def set_session_volume(
+        self,
+        session_id: str,
+        level: float | None = None,
+        muted: bool | None = None,
+    ) -> bool:
+        if session_id == "windows:Spotify.exe:0":
+            return await self.set_audio_app_volume("windows-audio:Spotify.exe", level, muted)
+        return False
+
+    async def get_master_volume(self) -> MasterVolumeInfo:
+        return self.master
+
+    async def set_master_volume(
+        self,
+        level: float | None = None,
+        muted: bool | None = None,
+    ) -> MasterVolumeInfo:
+        self.master = MasterVolumeInfo(
+            level=self.master.level if level is None else level,
+            muted=self.master.muted if muted is None else muted,
+            device_name=self.master.device_name,
+        )
+        return self.master
+
+    async def list_audio_apps(self) -> list[AudioAppInfo]:
+        return list(self.audio_apps)
+
+    async def set_audio_app_volume(
+        self,
+        app_audio_id: str,
+        level: float | None = None,
+        muted: bool | None = None,
+    ) -> bool:
+        for i, item in enumerate(self.audio_apps):
+            if item.id == app_audio_id:
+                self.audio_apps[i] = AudioAppInfo(
+                    id=item.id,
+                    source=item.source,
+                    app=item.app,
+                    process_name=item.process_name,
+                    pid=item.pid,
+                    active=item.active,
+                    volume=item.volume if level is None else level,
+                    muted=item.muted if muted is None else muted,
+                )
+                return True
+        return False
+
+    async def send_media_key(self, action: MediaAction) -> bool:
+        if action == "seek":
+            return False
+        self.media_keys_sent.append(action)
+        return True
+
+
+class FakeExtensionTransport:
+    """In-memory extension WebSocket stub that auto-acks requests."""
+
+    def __init__(self, provider: ChromeExtensionProvider, ack_ok: bool = True) -> None:
+        self.provider = provider
+        self.ack_ok = ack_ok
+        self.sent: list[dict[str, Any]] = []
+
+    async def send_json(self, data: Any) -> None:
+        self.sent.append(data)
+        req_id = data.get("requestId")
+        if req_id:
+            await self.provider.handle_message(
+                {"v": 1, "type": "extension_ack", "requestId": req_id, "ok": self.ack_ok}
+            )
+
+
+def test_protocol_v1_validation() -> None:
+    cmd = parse_client_message(
+        {
+            "v": 1,
+            "type": "command",
+            "sessionId": "windows:Spotify.exe:0",
+            "action": "seek",
+            "value": 42,
+        }
+    )
+    assert isinstance(cmd, CommandMessage)
+    assert cmd.value == 42.0
+
+    vol = parse_client_message({"v": 1, "type": "volume", "target": "master", "value": 0.65})
+    assert isinstance(vol, VolumeMessage)
+    assert vol.value == 0.65
+
+    sel = parse_client_message({"v": 1, "type": "select", "sessionId": "chrome:11"})
+    assert isinstance(sel, SelectMessage)
+
+    ping = parse_client_message({"v": 1, "type": "ping", "requestId": "r1"})
+    assert isinstance(ping, PingMessage)
+
+    with pytest.raises(ValidationError):
+        parse_client_message({"v": 2, "type": "ping"})
+    with pytest.raises(ValidationError):
+        parse_client_message(
+            {"v": 1, "type": "command", "sessionId": "windows:Spotify.exe:0", "action": "seek"}
+        )
+    with pytest.raises(ValidationError):
+        parse_client_message({"v": 1, "type": "volume", "target": "master", "value": 1.5})
+    with pytest.raises(ValidationError):
+        parse_client_message({"v": 1, "type": "volume", "target": "master"})
+
+
+def test_windows_helper_functions() -> None:
+    assert friendly_app_name("Spotify.exe") == "Spotify"
+    assert friendly_app_name("chrome.exe") == "Google Chrome"
+    assert friendly_app_name("vlc.exe") == "VLC"
+    assert friendly_app_name("CustomApp.exe") == "CustomApp"
+    assert parse_windows_session_id("windows:Spotify.exe:0") == ("Spotify.exe", 0)
+    assert parse_windows_session_id("chrome:42") is None
+
+
+def test_coordinator_unifies_and_deduplicates_chrome_when_extension_connected() -> None:
+    async def _scenario() -> None:
+        win = FakeWindowsProvider()
+        ext = ChromeExtensionProvider()
+        coord = HostStateCoordinator(providers=[ext, win], audio_provider=win)
+
+        # Without extension: Windows Spotify + Chrome GSMTC both appear
+        state_no_ext = await coord.build_state()
+        assert state_no_ext.extensionConnected is False
+        assert [s.id for s in state_no_ext.sessions] == [
+            "windows:Spotify.exe:0",
+            "windows:chrome.exe:0",
+        ]
+        # Windows session volume enriched from audio apps
+        assert state_no_ext.sessions[0].volume == 0.8
+
+        # Connect extension with 2 YouTube tabs -> chrome.exe GSMTC hidden
+        transport = FakeExtensionTransport(ext)
+        ext.attach(transport)
+        await ext.handle_message(
+            {
+                "v": 1,
+                "type": "extension_state",
+                "tabs": [
+                    {
+                        "tabId": "101",
+                        "title": "Video Um",
+                        "channel": "Canal A",
+                        "status": "PLAYING",
+                        "position": 10.0,
+                        "duration": 120.0,
+                        "volume": 0.7,
+                        "muted": False,
+                    },
+                    {
+                        "tabId": "102",
+                        "title": "Video Dois",
+                        "channel": "Canal B",
+                        "status": "PAUSED",
+                        "position": 20.0,
+                        "duration": 240.0,
+                        "volume": 0.4,
+                        "muted": True,
+                    },
+                ],
+            }
+        )
+
+        state_with_ext = await coord.build_state()
+        assert state_with_ext.extensionConnected is True
+        assert [s.id for s in state_with_ext.sessions] == [
+            "chrome:101",
+            "chrome:102",
+            "windows:Spotify.exe:0",
+        ]
+        assert all(s.appId != "chrome.exe" or s.source == "chrome" for s in state_with_ext.sessions)
+
+        # Commands and tab volume route to Chrome extension
+        err = await coord.handle_raw_client_message(
+            {"v": 1, "type": "command", "sessionId": "chrome:102", "action": "seek", "value": 55}
+        )
+        assert err is None
+        err = await coord.handle_raw_client_message(
+            {"v": 1, "type": "volume", "target": "chrome:101", "value": 0.35}
+        )
+        assert err is None
+        assert transport.sent[0]["type"] == "command"
+        assert transport.sent[0]["tabId"] == "102"
+        assert transport.sent[1]["type"] == "volume"
+        assert transport.sent[1]["value"] == 0.35
+
+        # Fallback media key + VLC Core Audio volume
+        err = await coord.handle_raw_client_message(
+            {"v": 1, "type": "command", "sessionId": "windows:fallback", "action": "toggle"}
+        )
+        assert err is None
+        assert win.media_keys_sent == ["toggle"]
+
+        err = await coord.handle_raw_client_message(
+            {"v": 1, "type": "volume", "target": "windows-audio:vlc.exe", "value": 0.25}
+        )
+        assert err is None
+        assert win.audio_apps[1].volume == 0.25
+
+        # Disconnect extension -> Windows chrome.exe GSMTC reappears
+        ext.detach(transport)
+        state_after = await coord.build_state()
+        assert state_after.extensionConnected is False
+        assert "windows:chrome.exe:0" in [s.id for s in state_after.sessions]
+
+    asyncio.run(_scenario())
+
+
+def test_fastapi_endpoints_and_websockets_with_mocked_providers() -> None:
+    win = FakeWindowsProvider()
+    ext = ChromeExtensionProvider()
+    app = create_app(
+        settings=HostSettings(host="127.0.0.1", port=8765, poll_interval_sec=60.0),
+        providers=[ext, win],
+        audio_provider=win,
+        chrome_provider=ext,
+    )
+
+    with TestClient(app) as client:
+        html_resp = client.get("/")
+        assert html_resp.status_code == 200
+        assert "PC Media Control" in html_resp.text
+
+        health = client.get("/health").json()
+        assert health["status"] == "ok"
+        assert health["host"] == "127.0.0.1"
+        assert health["extensionConnected"] is False
+
+        api_state = client.get("/api/state").json()
+        assert api_state["v"] == 1
+        assert len(api_state["sessions"]) == 2
+
+        with client.websocket_connect("/ws") as ws:
+            initial = ws.receive_json()
+            assert initial["type"] == "state"
+            assert initial["activeSessionId"] == "windows:Spotify.exe:0"
+
+            ws.send_json({"v": 1, "type": "ping", "requestId": "p1"})
+            pong = ws.receive_json()
+            assert pong == {"v": 1, "type": "pong", "requestId": "p1"}
+
+            ws.send_text("{bad json")
+            err = ws.receive_json()
+            assert err["type"] == "error"
+            assert err["code"] == "invalid_json"
+
+            ws.send_json({"v": 1, "type": "select", "sessionId": "windows:chrome.exe:0"})
+            updated = ws.receive_json()
+            assert updated["activeSessionId"] == "windows:chrome.exe:0"
+
+            ws.send_json(
+                {
+                    "v": 1,
+                    "type": "command",
+                    "sessionId": "windows:Spotify.exe:0",
+                    "action": "pause",
+                }
+            )
+            after_cmd = ws.receive_json()
+            assert after_cmd["type"] == "state"
+            assert win.executed_commands[-1] == ("windows:Spotify.exe:0", "pause", None)
+
+            ws.send_json({"v": 1, "type": "volume", "target": "master", "value": 0.2})
+            after_vol = ws.receive_json()
+            assert after_vol["masterVolume"]["level"] == 0.2
+
+            ws.send_json({"v": 1, "type": "select", "sessionId": "windows:missing:0"})
+            missing_err = ws.receive_json()
+            assert missing_err["type"] == "error"
+            assert missing_err["code"] == "session_not_found"
+
+            # Connect Chrome extension via /ws/extension and observe deduplication live
+            with client.websocket_connect("/ws/extension") as ext_ws:
+                _ = ws.receive_json()  # broadcast on extension attach
+                ext_ws.send_json(
+                    {
+                        "v": 1,
+                        "type": "extension_state",
+                        "tabs": [
+                            {
+                                "tabId": "77",
+                                "title": "YouTube Tab",
+                                "channel": "Canal X",
+                                "status": "PLAYING",
+                                "position": 3.0,
+                                "duration": 60.0,
+                                "volume": 0.9,
+                            }
+                        ],
+                    }
+                )
+                ext_state = ws.receive_json()
+                assert ext_state["extensionConnected"] is True
+                ids = [s["id"] for s in ext_state["sessions"]]
+                assert "chrome:77" in ids
+                assert "windows:chrome.exe:0" not in ids
