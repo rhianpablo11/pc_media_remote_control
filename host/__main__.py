@@ -1,20 +1,57 @@
-"""CLI entrypoint for running the host server and doctor diagnostics."""
+"""CLI entrypoint for running the host server, system tray, and doctor diagnostics."""
 
 from __future__ import annotations
 
 import argparse
 import contextlib
 import json
+import logging
 import os
 import socket
 import subprocess
+import sys
+import webbrowser
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 import uvicorn
 
 from host.app import create_app
-from host.config import DEFAULT_EXTENSION_ID, HostSettings
+from host.config import DEFAULT_EXTENSION_ID, HostSettings, get_logs_dir
 from host.network import list_lan_interfaces, resolve_primary_lan_ip
 from host.pairing import PairingManager, render_qr_ascii
+from host.single_instance import SingleInstanceLock
+from host.tray import SystemTrayApp
+
+logger = logging.getLogger("pc_media_control")
+
+
+def setup_logging(log_level: str = "INFO", console: bool = True) -> Path:
+    """Configure rotating file logging in %LOCALAPPDATA%\\PCMediaControl\\logs."""
+    logs_dir = get_logs_dir()
+    log_file = logs_dir / "pc_media_control.log"
+    file_handler = RotatingFileHandler(
+        log_file,
+        maxBytes=3 * 1024 * 1024,
+        backupCount=3,
+        encoding="utf-8",
+    )
+    file_handler.setFormatter(
+        logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    )
+    handlers: list[logging.Handler] = [file_handler]
+
+    has_stdout = getattr(sys, "stdout", None) is not None
+    if console and has_stdout:
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(
+            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+        )
+        handlers.append(console_handler)
+
+    level_num = getattr(logging, log_level.upper(), logging.INFO)
+    logging.basicConfig(level=level_num, handlers=handlers, force=True)
+    return log_file
 
 
 def run_doctor(port: int = 8765) -> int:
@@ -135,13 +172,13 @@ def run_doctor(port: int = 8765) -> int:
         print(f"  [AVISO] A porta {port} está aberta em 127.0.0.1, mas INACESSÍVEL na LAN:")
         print(f"          {chosen_ip}:{port} não respondeu.")
         print("          Possíveis causas:")
-        print("          1. O host foi iniciado sem a flag --lan (escutando só em localhost).")
-        print("             Execute: .\\.venv\\Scripts\\python.exe -m host --lan")
+        print("          1. O host foi iniciado sem suporte à LAN.")
+        print("             Execute: .\\.venv\\Scripts\\python.exe -m host")
         print("          2. O Firewall do Windows está bloqueando conexões externas.")
         print("             Execute como Administrador: .\\scripts\\allow_firewall.cmd")
     else:
         print(f"  A porta {port} está livre (o host não está rodando no momento).")
-        print("  Para iniciar na LAN: .\\.venv\\Scripts\\python.exe -m host --lan")
+        print("  Para iniciar na LAN: .\\.venv\\Scripts\\python.exe -m host")
     print()
 
     # 5. AP Isolation & Hotspot Guidance
@@ -150,13 +187,13 @@ def run_doctor(port: int = 8765) -> int:
     print("  - Teste: tente abrir http://<ip_do_pc>:8765 no navegador do celular.")
     print("    Se a página não carregar com o firewall liberado, a rede possui AP Isolation.")
     print("  - Plano B (Hotspot): ative o 'Hotspot Móvel' do Windows ou do celular,")
-    print("    conecte ambos na mesma rede do hotspot e inicie o host normalmente com --lan.")
+    print("    conecte ambos na mesma rede do hotspot e inicie o host normalmente.")
     print("=" * 64)
     return 0
 
 
 def main() -> int:
-    """Start the FastAPI host strictly bound or on LAN with pairing."""
+    """Start the FastAPI host strictly bound or on LAN with pairing and system tray."""
     parser = argparse.ArgumentParser(description="PC Media Control Host")
     subparsers = parser.add_subparsers(dest="subcommand")
 
@@ -184,7 +221,13 @@ def main() -> int:
     parser.add_argument(
         "--lan",
         action="store_true",
-        help="Habilita modo LAN: escuta em todas as interfaces com pareamento obrigatório",
+        default=True,
+        help="Habilita modo LAN com pareamento obrigatório (padrão: ativado)",
+    )
+    parser.add_argument(
+        "--local-only",
+        action="store_true",
+        help="Executa estritamente em 127.0.0.1 (desativa acesso via LAN)",
     )
     parser.add_argument(
         "--ip",
@@ -202,22 +245,45 @@ def main() -> int:
         default=[],
         help="Origem extra autorizada no /ws (pode repetir)",
     )
+    parser.add_argument(
+        "--no-tray",
+        action="store_true",
+        help="Não exibe o ícone na bandeja do sistema",
+    )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Executa sem saída para console padrão (modo background)",
+    )
     args = parser.parse_args()
+
+    # Configure rotating file logging
+    log_file = setup_logging(console=not args.headless)
 
     if args.subcommand == "doctor":
         return run_doctor(port=args.port)
 
+    logger.info("PC Media Control iniciando. Arquivo de log: %s", log_file)
+
+    # Single-instance lock
+    lock = SingleInstanceLock()
+    if not lock.acquire():
+        logger.warning("Instância existente detectada. Abrindo página de pareamento...")
+        with contextlib.suppress(Exception):
+            webbrowser.open(f"http://127.0.0.1:{args.port}/pair")
+        return 0
+
+    lan_mode = not args.local_only
+    bind_host = "0.0.0.0" if lan_mode else "127.0.0.1"
     lan_ip: str | None = None
-    bind_host = "127.0.0.1"
     pairing_mgr = PairingManager()
 
-    if args.lan:
-        bind_host = "0.0.0.0"
+    if lan_mode:
         interfaces = list_lan_interfaces()
         lan_ip, candidates = resolve_primary_lan_ip(interfaces=interfaces, override_ip=args.ip)
 
         physical_candidates = [c for c in candidates if not c.is_virtual]
-        if len(physical_candidates) > 1:
+        if len(physical_candidates) > 1 and not args.headless:
             print("\n[Aviso] Múltiplos adaptadores de rede físicos encontrados:")
             for cand in physical_candidates:
                 marker = " (ativo no QR)" if cand.ip == lan_ip else ""
@@ -226,22 +292,23 @@ def main() -> int:
         session = pairing_mgr.get_or_create_pairing_session()
         pairing_url = f"http://{lan_ip}:{args.port}/?pair={session.code}"
 
-        print("\n" + "=" * 58)
-        print("          PC MEDIA CONTROL — MODO LAN ATIVADO             ")
-        print("=" * 58)
-        print(f"IP da LAN:  {lan_ip}")
-        print(f"Porta:      {args.port}")
-        print(f"URL:        {pairing_url}")
-        print(f"PIN (6 dig): {session.pin[:3]} {session.pin[3:]}  (expira em 5 min)")
-        print(f"Pareamento: http://127.0.0.1:{args.port}/pair (apenas no PC)")
-        print("-" * 58)
-        print("Escaneie o QR Code abaixo com a câmera do celular:")
-        with contextlib.suppress(Exception):
-            print(render_qr_ascii(pairing_url))
-        print("=" * 58 + "\n")
+        if not args.headless:
+            print("\n" + "=" * 58)
+            print("          PC MEDIA CONTROL — MODO LAN ATIVADO             ")
+            print("=" * 58)
+            print(f"IP da LAN:  {lan_ip}")
+            print(f"Porta:      {args.port}")
+            print(f"URL:        {pairing_url}")
+            print(f"PIN (6 dig): {session.pin[:3]} {session.pin[3:]}  (expira em 5 min)")
+            print(f"Pareamento: http://127.0.0.1:{args.port}/pair (apenas no PC)")
+            print("-" * 58)
+            print("Escaneie o QR Code abaixo com a câmera do celular:")
+            with contextlib.suppress(Exception):
+                print(render_qr_ascii(pairing_url))
+            print("=" * 58 + "\n")
     else:
-        print(f"\nPC Media Control Host rodando em modo local: http://127.0.0.1:{args.port}")
-        print("Para acessar a partir do celular, reinicie com a flag --lan.\n")
+        if not args.headless:
+            print(f"\nPC Media Control Host rodando em modo local: http://127.0.0.1:{args.port}\n")
 
     settings = HostSettings(
         host=bind_host,
@@ -250,13 +317,38 @@ def main() -> int:
         extension_id=args.extension_id,
         dev_mode=args.dev,
         extra_ws_origins=tuple(args.allow_ws_origin),
-        lan_mode=args.lan,
+        lan_mode=lan_mode,
         lan_ip=lan_ip,
         pairing_manager=pairing_mgr,
     )
 
     app = create_app(settings=settings, pairing_manager=pairing_mgr)
-    uvicorn.run(app, host=settings.host, port=settings.port, log_level="info")
+
+    server = uvicorn.Server(
+        config=uvicorn.Config(
+            app=app,
+            host=settings.host,
+            port=settings.port,
+            log_level="info" if not args.headless else "warning",
+        )
+    )
+
+    tray_app: SystemTrayApp | None = None
+    if not args.no_tray:
+        tray_app = SystemTrayApp(
+            settings=settings,
+            pairing_manager=pairing_mgr,
+            on_exit=lambda: setattr(server, "should_exit", True),
+        )
+        tray_app.start()
+
+    try:
+        server.run()
+    finally:
+        if tray_app is not None:
+            tray_app.stop()
+        lock.release()
+
     return 0
 
 

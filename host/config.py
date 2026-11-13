@@ -6,6 +6,7 @@ import base64
 import hashlib
 import os
 import socket
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -13,7 +14,34 @@ from urllib.parse import urlsplit
 from host.pairing import PairingManager
 
 DEFAULT_EXTENSION_ID = "dcnkokmkhlcocfengaobkeacnbdjdcfa"
-DEFAULT_CLIENT_DIST_DIR = Path(__file__).resolve().parent.parent / "client" / "dist"
+
+
+def get_base_dir() -> Path:
+    """Return the base directory for resources, supporting PyInstaller bundles and dev sources."""
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS)  # type: ignore[attr-defined]
+    return Path(__file__).resolve().parent.parent
+
+
+def get_app_data_dir() -> Path:
+    """Return the persistent user data dir (%LOCALAPPDATA%\\PCMediaControl or ~/.pcmediacontrol)."""
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        base = Path(local_app_data) / "PCMediaControl"
+    else:
+        base = Path.home() / ".pcmediacontrol"
+    base.mkdir(parents=True, exist_ok=True)
+    return base
+
+
+def get_logs_dir() -> Path:
+    """Return the persistent log directory (%LOCALAPPDATA%\\PCMediaControl\\logs)."""
+    logs = get_app_data_dir() / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    return logs
+
+
+DEFAULT_CLIENT_DIST_DIR = get_base_dir() / "client" / "dist"
 DEFAULT_DEV_WS_ORIGINS = ("http://localhost:5173", "http://127.0.0.1:5173")
 
 

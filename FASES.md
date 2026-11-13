@@ -1,6 +1,6 @@
 # Fases — PC Media Control
 
-**Fase atual: 4**
+**Fase atual: 5**
 
 Regra: concluir a fase, marcar os checkboxes, commitar, parar e reportar. Só avançar quando o usuário autorizar.
 
@@ -57,10 +57,10 @@ Objetivo: descobrir o que o Windows realmente nos entrega, antes de construir qu
 **Aceite:** do celular Android real, escaneio o QR, pareio e controlo o notebook; um segundo aparelho sem pareamento não consegue controlar nada.
 
 ## Fase 5 — App de bandeja e instalação (Windows)
-- [ ] Ícone na bandeja: status, mostrar QR, dispositivos pareados, sair
-- [ ] Iniciar com o Windows (opcional, configurável)
-- [ ] Empacotamento em executável (PyInstaller ou equivalente)
-- [ ] `README.md` com instalação e uso
+- [x] Ícone na bandeja: status, mostrar QR, dispositivos pareados, sair *(implementado com `pystray` + `Pillow` em `host/tray.py`, exibindo IP/porta ativos, atalhos para `/pair` e `/`, submenu de dispositivos pareados com revogação, pasta de logs e encerramento limpo)*
+- [x] Iniciar com o Windows (opcional, configurável) *(módulo `host/autostart.py` configurando chave `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` com toggle no menu da bandeja)*
+- [x] Empacotamento em executável (PyInstaller ou equivalente) *(configurado `pc_media_control.spec` e script `scripts/build_exe.py` gerando `dist/PCMediaControl.exe` autônomo sem console com recursos embutidos, trava de instância única via Named Mutex Win32 e logs rotativos em `%LOCALAPPDATA%\PCMediaControl\logs`)*
+- [x] `README.md` com instalação e uso *(seções detalhadas de execução via executável vs ambiente virtual, opções do menu de bandeja, autostart, compilação e diagnóstico)*
 
 **Aceite:** instalo no notebook, reinicio, e o controle continua funcionando sem abrir terminal.
 

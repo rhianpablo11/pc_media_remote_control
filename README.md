@@ -65,23 +65,56 @@ pip install -r host/requirements.txt
 
 ## Executando o Servidor
 
-### Modo Local (apenas no PC)
-```powershell
-.\.venv\Scripts\python.exe -m host
-```
-Acesse `http://127.0.0.1:8765` pelo navegador no computador.
+Você pode executar o PC Media Control de duas formas: usando o executável independente (`PCMediaControl.exe`) ou via script Python no ambiente virtual.
 
-### Modo LAN (para controlar pelo Celular)
+### Opção 1: Executável Independente (Recomendado)
+
+O executável inicia diretamente na bandeja do sistema (junto ao relógio do Windows), sem abrir janela preta de terminal:
+
+1. Dê um duplo clique em `PCMediaControl.exe` (ou execute via linha de comando).
+2. O ícone do projeto aparecerá na área de notificação da barra de tarefas.
+3. Se você executar o arquivo novamente com o app já rodando, a segunda instância detecta a trava única e abre automaticamente a tela de pareamento no navegador padrão.
+
+> **Como compilar o executável:**
+> ```powershell
+> .\.venv\Scripts\python.exe scripts\build_exe.py
+> ```
+> O executável será gerado em `dist/PCMediaControl.exe` já empacotando o cliente web, a extensão, os ícones e os recursos estáticos.
+
+---
+
+### Opção 2: Via Ambiente Virtual Python
+
 ```powershell
-.\.venv\Scripts\python.exe -m host --lan
+# Execução padrão (LAN ativa + Ícone na bandeja do sistema):
+.\.venv\Scripts\python.exe -m host
+
+# Execução apenas no terminal (sem ícone na bandeja):
+.\.venv\Scripts\python.exe -m host --no-tray
+
+# Execução restrita estritamente ao computador (loopback 127.0.0.1):
+.\.venv\Scripts\python.exe -m host --local-only
 ```
-Ao iniciar, o terminal exibirá:
+
+Ao iniciar pelo terminal com a LAN ativa, o console exibirá:
 1. O IP da rede local selecionado (ex.: `192.168.15.4`).
 2. A URL de pareamento com o código de uso único.
 3. Um **PIN de 6 dígitos** alternativo (expira em 5 minutos).
 4. O **QR Code** impresso em caracteres ASCII no próprio terminal.
 
-Aponte a câmera do celular para o QR Code para abrir o aplicativo e concluir a autorização automaticamente.
+---
+
+## Ícone na Bandeja do Sistema (System Tray)
+
+Ao clicar com o botão direito no ícone do aplicativo na bandeja do Windows, você tem acesso rápido a:
+
+- **Status da Conexão:** exibe o IP e a porta local onde o servidor está atendendo (ex.: `Ativo na LAN (192.168.15.4:8765)`).
+- **📱 Parear Celular (QR Code)...:** abre a página de pareamento (`/pair`) no navegador padrão com o QR Code e PIN de 6 dígitos.
+- **🎵 Abrir Central de Mídia:** abre a interface principal (`/`) no navegador do computador.
+- **🔒 Dispositivos Pareados:** lista os aparelhos autorizados e permite revogar o acesso de qualquer dispositivo com um clique.
+- **Iniciar com o Windows:** ativa ou desativa a inicialização automática do aplicativo em segundo plano ao ligar o computador (via registro do usuário em `HKCU\...\Run`).
+- **📂 Abrir pasta de logs:** abre a pasta `%LOCALAPPDATA%\PCMediaControl\logs` onde os logs rotativos são gravados.
+- **Sair:** encerra o servidor e os serviços de rede graciosamente.
 
 ---
 
