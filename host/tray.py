@@ -10,8 +10,8 @@ from typing import TYPE_CHECKING, Any
 
 from PIL import Image, ImageDraw
 
-from host.autostart import is_autostart_enabled, set_autostart
-from host.config import get_base_dir, get_logs_dir
+from host.autostart import get_autostart_status, set_autostart
+from host.config import get_base_dir, get_logs_dir, sync_installed_extension
 
 if TYPE_CHECKING:
     from host.config import HostSettings
@@ -78,9 +78,23 @@ class SystemTrayApp:
         except Exception as exc:  # noqa: BLE001
             logger.warning("Erro ao abrir pasta de logs: %s", exc)
 
+    def _open_extension_dir(self) -> None:
+        """Sincroniza e abre a pasta da extensão no Windows Explorer com o LEIA-ME."""
+        ext_dir = sync_installed_extension()
+        try:
+            os.startfile(ext_dir)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Erro ao abrir pasta da extensão: %s", exc)
+
+    def _get_autostart_label(self) -> str:
+        status = get_autostart_status()
+        if status.is_enabled and not status.is_valid:
+            return "Iniciar com o Windows (arquivo não encontrado)"
+        return "Iniciar com o Windows"
+
     def _toggle_autostart(self, _icon: Any, _item: Any) -> None:
-        current = is_autostart_enabled()
-        set_autostart(not current)
+        status = get_autostart_status()
+        set_autostart(not status.is_enabled)
 
     def _on_exit_clicked(self, _icon: Any, _item: Any) -> None:
         logger.info("Encerramento solicitado pelo menu da bandeja.")
@@ -143,9 +157,13 @@ class SystemTrayApp:
             pystray.MenuItem("🔒 Dispositivos Pareados", self._get_devices_submenu()),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(
-                "Iniciar com o Windows",
+                self._get_autostart_label(),
                 self._toggle_autostart,
-                checked=lambda _item: is_autostart_enabled(),
+                checked=lambda _item: get_autostart_status().is_enabled,
+            ),
+            pystray.MenuItem(
+                "🧩 Abrir pasta da extensão...",
+                lambda _i, _m: self._open_extension_dir(),
             ),
             pystray.MenuItem("📂 Abrir pasta de logs", lambda _i, _m: self._open_logs()),
             pystray.Menu.SEPARATOR,

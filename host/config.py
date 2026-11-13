@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import os
+import shutil
 import socket
 import sys
 from dataclasses import dataclass
@@ -39,6 +41,60 @@ def get_logs_dir() -> Path:
     logs = get_app_data_dir() / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     return logs
+
+
+def get_installed_extension_dir() -> Path:
+    """Return the persistent user directory for the Chrome extension."""
+    ext_dir = get_app_data_dir() / "extension"
+    ext_dir.mkdir(parents=True, exist_ok=True)
+    return ext_dir
+
+
+def sync_installed_extension() -> Path:
+    """Ensure the Chrome extension in %LOCALAPPDATA%\\PCMediaControl\\extension is up to date."""
+    target_dir = get_installed_extension_dir()
+    source_dir = get_base_dir() / "extension"
+
+    if not source_dir.is_dir():
+        return target_dir
+
+    source_manifest_path = source_dir / "manifest.json"
+    target_manifest_path = target_dir / "manifest.json"
+
+    should_sync = not target_manifest_path.is_file()
+
+    if not should_sync and source_manifest_path.is_file():
+        try:
+            with open(source_manifest_path, encoding="utf-8") as sf:
+                src_manifest = json.load(sf)
+            with open(target_manifest_path, encoding="utf-8") as tf:
+                tgt_manifest = json.load(tf)
+            if src_manifest.get("version") != tgt_manifest.get("version"):
+                should_sync = True
+        except Exception:
+            should_sync = True
+
+    if should_sync:
+        for item in source_dir.iterdir():
+            if item.is_file():
+                shutil.copy2(item, target_dir / item.name)
+
+        instructions = (
+            "======================================================================\n"
+            "PC Media Control — Como carregar a extensao no Google Chrome\n"
+            "======================================================================\n\n"
+            "1. Abra o Google Chrome no seu computador.\n"
+            "2. Na barra de enderecos, digite: chrome://extensions e aperte Enter.\n"
+            "3. No canto superior direito, ative a chave 'Modo do desenvolvedor'.\n"
+            "4. Clique no botao 'Carregar sem compactacao' (Load unpacked).\n"
+            f"5. Selecione ESTA PASTA: {target_dir}\n"
+            "6. Pronto! A extensao estara conectada ao PC Media Control de forma\n"
+            "   permanente e nao sera perdida mesmo ao mover ou atualizar o app.\n"
+            "======================================================================\n"
+        )
+        (target_dir / "LEIA-ME.txt").write_text(instructions, encoding="utf-8")
+
+    return target_dir
 
 
 DEFAULT_CLIENT_DIST_DIR = get_base_dir() / "client" / "dist"

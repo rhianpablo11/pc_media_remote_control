@@ -54,12 +54,16 @@ pip install -r host/requirements.txt
 
 ### 2. Carregar a extensão no Google Chrome
 
-1. Abra o Chrome e acesse `chrome://extensions`.
-2. No canto superior direito, ative o interruptor **"Modo do desenvolvedor"**.
-3. Clique no botão **"Carregar sem compactação"** (Load unpacked).
-4. Selecione a pasta `extension/` deste repositório.
-5. O ID determinístico gerado pela extensão será:
-   `kclphkiojphjbbomdfcpeffjljgmpcne`
+A extensão faz a ponte com as abas do YouTube e outros reprodutores no Chrome:
+
+1. **Pela bandeja:** Clique com o botão direito no ícone do aplicativo na bandeja do Windows e selecione **"🧩 Abrir pasta da extensão..."**. (Os arquivos são mantidos de forma persistente em `%LOCALAPPDATA%\PCMediaControl\extension`).
+   - *Alternativa manual:* Use a pasta `extension/` deste repositório.
+2. Abra o Chrome e acesse `chrome://extensions`.
+3. No canto superior direito, ative o interruptor **"Modo do desenvolvedor"**.
+4. Clique no botão **"Carregar sem compactação"** (Load unpacked).
+5. Selecione a pasta da extensão aberta no passo 1.
+6. O ID determinístico gerado pela extensão será:
+   `dcnkokmkhlcocfengaobkeacnbdjdcfa`
 
 ---
 
@@ -112,7 +116,8 @@ Ao clicar com o botão direito no ícone do aplicativo na bandeja do Windows, vo
 - **📱 Parear Celular (QR Code)...:** abre a página de pareamento (`/pair`) no navegador padrão com o QR Code e PIN de 6 dígitos.
 - **🎵 Abrir Central de Mídia:** abre a interface principal (`/`) no navegador do computador.
 - **🔒 Dispositivos Pareados:** lista os aparelhos autorizados e permite revogar o acesso de qualquer dispositivo com um clique.
-- **Iniciar com o Windows:** ativa ou desativa a inicialização automática do aplicativo em segundo plano ao ligar o computador (via registro do usuário em `HKCU\...\Run`).
+- **Iniciar com o Windows:** ativa ou desativa a inicialização automática do aplicativo em segundo plano ao ligar o computador (via registro do usuário em `HKCU\...\Run`). Ao ativar, o executável é copiado para um local estável e persistente em `%LOCALAPPDATA%\PCMediaControl\PCMediaControl.exe` (protegendo a inicialização caso a pasta original seja movida ou sincronizada pelo OneDrive).
+- **🧩 Abrir pasta da extensão...:** abre a pasta estável `%LOCALAPPDATA%\PCMediaControl\extension` no Explorer contendo a extensão pronta para ser carregada no Chrome.
 - **📂 Abrir pasta de logs:** abre a pasta `%LOCALAPPDATA%\PCMediaControl\logs` onde os logs rotativos são gravados.
 - **Sair:** encerra o servidor e os serviços de rede graciosamente.
 
@@ -133,15 +138,29 @@ Ele verifica:
 - Conectividade da porta 8765.
 - Alertas sobre isolamento de clientes (AP Isolation).
 
-### 2. Liberar o Firewall do Windows
+### 2. Aviso do Firewall do Windows na Primeira Execução
 
-Para permitir que o celular acesse a porta 8765 apenas pela sua rede local, execute o script PowerShell como Administrador:
-```powershell
-# Abra o PowerShell como Administrador:
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
-.\scripts\allow_firewall.ps1
-```
-Esse script cria uma regra de entrada no Firewall do Windows restrita à sub-rede local (`RemoteAddress LocalSubnet`), protegendo o computador contra acessos externos.
+Na primeira vez que você executar o aplicativo (ou o Python) com a rede LAN ativada, o Windows Defender exibirá a caixa de diálogo:
+> **"O Firewall do Windows Defender bloqueou alguns recursos deste aplicativo"**
+
+1. Marque a caixa de seleção: **"Redes privadas, como rede doméstica ou de trabalho"**.
+2. **Desmarque** a caixa de seleção: **"Redes públicas, como as de aeroportos ou cafeterias"** (por segurança).
+3. Clique em **"Permitir acesso"**.
+
+---
+
+### 3. Liberar o Firewall via Script (Alternativa Automática)
+
+Se a janela do firewall não apareceu ou foi fechada por engano, você pode criar a regra correta com um clique:
+
+- **Via duplo clique (Mais fácil):**
+  Dê um duplo clique no arquivo `scripts\allow_firewall.cmd`. Ele solicitará permissão de Administrador (UAC) e criará a regra no Firewall automaticamente.
+- **Ou pelo PowerShell como Administrador:**
+  ```powershell
+  Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
+  .\scripts\allow_firewall.ps1
+  ```
+Esse script cria uma regra de entrada no Firewall do Windows restrita exclusivamente à sua sub-rede local (`RemoteAddress LocalSubnet`), sem expor o computador para a internet.
 
 ### 3. Perfil de Rede: Público vs Privado
 

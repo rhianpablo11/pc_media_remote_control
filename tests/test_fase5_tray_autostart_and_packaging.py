@@ -115,6 +115,7 @@ def test_system_tray_menu_structure() -> None:
     assert any("Abrir Central de Mídia" in t for t in item_texts)
     assert any("Dispositivos Pareados" in t for t in item_texts)
     assert any("Iniciar com o Windows" in t for t in item_texts)
+    assert any("Abrir pasta da extensão" in t for t in item_texts)
     assert any("Abrir pasta de logs" in t for t in item_texts)
     assert any("Sair" in t for t in item_texts)
 
@@ -161,4 +162,47 @@ def test_gui_mode_without_console_stdout_none(monkeypatch: pytest.MonkeyPatch) -
     )
     server = uvicorn.Server(cfg)
     assert server is not None
+
+
+def test_extension_sync_to_appdata() -> None:
+    """Ensure Chrome extension files are synced to stable %LOCALAPPDATA% directory with LEIA-ME."""
+    from host.config import get_installed_extension_dir, sync_installed_extension
+
+    ext_dir = sync_installed_extension()
+    assert ext_dir == get_installed_extension_dir()
+    assert ext_dir.is_dir()
+
+    manifest_file = ext_dir / "manifest.json"
+    assert manifest_file.is_file()
+
+    readme_file = ext_dir / "LEIA-ME.txt"
+    assert readme_file.is_file()
+    readme_content = readme_file.read_text(encoding="utf-8")
+    assert "chrome://extensions" in readme_content
+    assert "Modo do desenvolvedor" in readme_content
+
+
+def test_autostart_helpers_and_status() -> None:
+    """Ensure parse_executable_from_command and autostart status behave deterministically."""
+    from host.autostart import (
+        install_executable_to_app_data,
+        parse_executable_from_command,
+    )
+
+    # 1. Quoted command parsing
+    p1 = parse_executable_from_command(r'"C:\PCMedia\PCMediaControl.exe" --lan')
+    assert p1 == Path(r"C:\PCMedia\PCMediaControl.exe")
+
+    # 2. Unquoted command parsing
+    p2 = parse_executable_from_command(r"C:\PCMedia\app.exe --tray")
+    assert p2 == Path(r"C:\PCMedia\app.exe")
+
+    # 3. Empty command
+    assert parse_executable_from_command("") is None
+
+    # 4. install_executable_to_app_data should resolve to a valid path inside app_data_dir
+    target_exe = install_executable_to_app_data()
+    assert target_exe.name == "PCMediaControl.exe"
+    assert "PCMediaControl" in str(target_exe.parent)
+
 

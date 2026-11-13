@@ -26,7 +26,12 @@ if getattr(sys, "stdin", None) is None:
 import uvicorn
 
 from host.app import create_app
-from host.config import DEFAULT_EXTENSION_ID, HostSettings, get_logs_dir
+from host.config import (
+    DEFAULT_EXTENSION_ID,
+    HostSettings,
+    get_logs_dir,
+    sync_installed_extension,
+)
 from host.network import list_lan_interfaces, resolve_primary_lan_ip
 from host.pairing import PairingManager, render_qr_ascii
 from host.single_instance import SingleInstanceLock
@@ -278,6 +283,10 @@ def main() -> int:
 
     # Configure rotating file logging
     log_file = setup_logging(console=not args.headless)
+
+    # Ensure Chrome extension files are synced to stable user data directory
+    ext_dir = sync_installed_extension()
+    logger.info("Extensão Chrome sincronizada em: %s", ext_dir)
 
     if args.subcommand == "doctor":
         return run_doctor(port=args.port)

@@ -1,6 +1,6 @@
 # Fases — PC Media Control
 
-**Fase atual: 5**
+**Fase atual: 5.1**
 
 Regra: concluir a fase, marcar os checkboxes, commitar, parar e reportar. Só avançar quando o usuário autorizar.
 
@@ -63,6 +63,14 @@ Objetivo: descobrir o que o Windows realmente nos entrega, antes de construir qu
 - [x] `README.md` com instalação e uso *(seções detalhadas de execução via executável vs ambiente virtual, opções do menu de bandeja, autostart, compilação e diagnóstico)*
 
 **Aceite:** instalo no notebook, reinicio, e o controle continua funcionando sem abrir terminal.
+
+## Fase 5.1 — Caminhos estáveis de instalação (Autostart e Extensão)
+- [x] Autostart estável em `%LOCALAPPDATA%\PCMediaControl\PCMediaControl.exe`: cópia atômica na ativação, validação de existência do arquivo no registro e aviso visual caso o arquivo seja removido
+- [x] Extensão Chrome persistente em `%LOCALAPPDATA%\PCMediaControl\extension`: sincronização automática na primeira execução / versão nova com `LEIA-ME.txt` e item "🧩 Abrir pasta da extensão..." na bandeja
+- [x] Avaliação técnica do modo `onedir` vs `onefile` registrada em `ARQUITETURA.md`
+- [x] Atualização do `README.md` com instruções do aviso de Firewall do Windows e script `allow_firewall.cmd`
+
+**Aceite:** autostart desacoplado de pastas voláteis/OneDrive; extensão permanente acessível pelo menu da bandeja.
 
 ## Fase 6 — Modo touchpad/teclado remoto (opcional)
 - [ ] Tela de touchpad (mover cursor, clique, rolagem) e teclado de texto
