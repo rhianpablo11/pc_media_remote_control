@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Sequence
 from dataclasses import replace
 from typing import Any
@@ -12,6 +13,7 @@ from fastapi import WebSocket
 from pydantic import ValidationError
 
 from host.protocol import (
+    AckMessage,
     CommandMessage,
     ErrorMessage,
     OpenMessage,
@@ -73,6 +75,8 @@ class HostStateCoordinator:
         self._last_state_json: str | None = None
         self._last_session_statuses: dict[str, str] = {}
         self._state_lock = asyncio.Lock()
+        self._broadcast_task: asyncio.Task[None] | None = None
+        self._broadcast_pending_force: bool = False
 
     @property
     def has_clients(self) -> bool:
@@ -191,11 +195,36 @@ class HostStateCoordinator:
             self._clients.discard(client)
         return state
 
+    def _schedule_coalesced_broadcast(
+        self,
+        force: bool = False,
+        delay_sec: float = 0.035,
+    ) -> None:
+        """Coalesce rapid state changes (e.g. slider drags) with a trailing debounced broadcast."""
+        if self._broadcast_task is not None and not self._broadcast_task.done():
+            self._broadcast_pending_force = self._broadcast_pending_force or force
+            return
+
+        self._broadcast_pending_force = force
+
+        async def _debounced() -> None:
+            await asyncio.sleep(delay_sec)
+            force_flag = self._broadcast_pending_force
+            self._broadcast_pending_force = False
+            self._broadcast_task = None
+            try:
+                await self.broadcast_state(force=force_flag)
+            except Exception:  # noqa: BLE001
+                logger.exception("Erro ao transmitir estado coalescido")
+
+        self._broadcast_task = asyncio.create_task(_debounced())
+
     async def handle_raw_client_message(
         self,
         raw: Any,
-    ) -> PongMessage | ErrorMessage | None:
+    ) -> PongMessage | ErrorMessage | AckMessage | None:
         """Validate and process one incoming JSON message from a control client."""
+        start_time = time.perf_counter()
         req_id = (
             str(raw.get("requestId")) if isinstance(raw, dict) and raw.get("requestId") else None
         )
@@ -220,40 +249,107 @@ class HostStateCoordinator:
                     requestId=msg.requestId,
                 )
             self._selected_session_id = msg.sessionId
-            await self.broadcast_state(force=True)
+            self._schedule_coalesced_broadcast(force=True)
+            if msg.requestId is not None:
+                exec_ms = (time.perf_counter() - start_time) * 1000.0
+                return AckMessage(
+                    requestId=msg.requestId,
+                    ok=True,
+                    clientSentAt=msg.clientSentAt,
+                    execMs=round(exec_ms, 2),
+                    target=msg.sessionId,
+                )
             return None
 
         if isinstance(msg, CommandMessage):
-            ok = await self._dispatch_command(msg)
+            ok, reason = await self._dispatch_command(msg)
+            exec_ms = (time.perf_counter() - start_time) * 1000.0
             if not ok:
+                if msg.requestId is not None:
+                    return AckMessage(
+                        requestId=msg.requestId,
+                        ok=False,
+                        clientSentAt=msg.clientSentAt,
+                        execMs=round(exec_ms, 2),
+                        target=msg.sessionId,
+                        reason=reason,
+                    )
+                err_text = (
+                    f"Não foi possível executar '{msg.action}' em '{msg.sessionId}' ({reason})."
+                    if reason
+                    else f"Não foi possível executar '{msg.action}' em '{msg.sessionId}'."
+                )
                 return ErrorMessage(
                     code="command_failed",
-                    message=f"Não foi possível executar '{msg.action}' em '{msg.sessionId}'.",
+                    message=err_text,
                     requestId=msg.requestId,
                 )
-            await self.broadcast_state(force=True)
+            self._schedule_coalesced_broadcast(force=True)
+            if msg.requestId is not None:
+                return AckMessage(
+                    requestId=msg.requestId,
+                    ok=True,
+                    clientSentAt=msg.clientSentAt,
+                    execMs=round(exec_ms, 2),
+                    target=msg.sessionId,
+                    reason=reason,
+                )
             return None
 
         if isinstance(msg, VolumeMessage):
             ok = await self._dispatch_volume(msg)
+            exec_ms = (time.perf_counter() - start_time) * 1000.0
             if not ok:
+                if msg.requestId is not None:
+                    return AckMessage(
+                        requestId=msg.requestId,
+                        ok=False,
+                        clientSentAt=msg.clientSentAt,
+                        execMs=round(exec_ms, 2),
+                        target=msg.target,
+                        reason="volume_failed",
+                    )
                 return ErrorMessage(
                     code="volume_failed",
                     message=f"Não foi possível ajustar volume de '{msg.target}'.",
                     requestId=msg.requestId,
                 )
-            await self.broadcast_state(force=True)
+            self._schedule_coalesced_broadcast(force=True)
+            if msg.requestId is not None:
+                return AckMessage(
+                    requestId=msg.requestId,
+                    ok=True,
+                    clientSentAt=msg.clientSentAt,
+                    execMs=round(exec_ms, 2),
+                    target=msg.target,
+                )
             return None
 
         if isinstance(msg, OpenMessage):
             ok = await self._dispatch_open(msg)
+            exec_ms = (time.perf_counter() - start_time) * 1000.0
             if not ok:
+                if msg.requestId is not None:
+                    return AckMessage(
+                        requestId=msg.requestId,
+                        ok=False,
+                        clientSentAt=msg.clientSentAt,
+                        execMs=round(exec_ms, 2),
+                        reason="open_failed",
+                    )
                 return ErrorMessage(
                     code="open_failed",
                     message="Extensão Chrome desconectada ou não foi possível abrir a aba.",
                     requestId=msg.requestId,
                 )
-            await self.broadcast_state(force=True)
+            self._schedule_coalesced_broadcast(force=True)
+            if msg.requestId is not None:
+                return AckMessage(
+                    requestId=msg.requestId,
+                    ok=True,
+                    clientSentAt=msg.clientSentAt,
+                    execMs=round(exec_ms, 2),
+                )
             return None
 
         return None
@@ -267,7 +363,7 @@ class HostStateCoordinator:
             return False
         return bool(await open_fn(mode=msg.mode, query=msg.query, url=msg.url))
 
-    async def _dispatch_command(self, msg: CommandMessage) -> bool:
+    async def _dispatch_command(self, msg: CommandMessage) -> tuple[bool, str | None]:
         known_status = self._last_session_statuses.get(msg.sessionId, "UNKNOWN")
         logger.info(
             "Despachando comando action=%s session=%s (status_host=%s, ativa=%s)",
@@ -277,13 +373,20 @@ class HostStateCoordinator:
             self._selected_session_id,
         )
         if msg.sessionId == self._fallback_session_id:
-            return await self._audio_provider.send_media_key(msg.action)
+            ok = await self._audio_provider.send_media_key(msg.action)
+            return (ok, None if ok else "media_key_failed")
 
         source = msg.sessionId.split(":", 1)[0]
         provider = self._providers_by_source.get(source)
         if provider is None:
-            return False
-        return await provider.execute_command(msg.sessionId, msg.action, msg.value)
+            return (False, "provider_not_found")
+
+        dispatch_fn = getattr(provider, "execute_command_with_reason", None)
+        if callable(dispatch_fn):
+            return await dispatch_fn(msg.sessionId, msg.action, msg.value)
+
+        ok = await provider.execute_command(msg.sessionId, msg.action, msg.value)
+        return (ok, None if ok else "command_failed")
 
     async def _dispatch_volume(self, msg: VolumeMessage) -> bool:
         if msg.target == "master":

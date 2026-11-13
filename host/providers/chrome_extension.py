@@ -73,7 +73,7 @@ class ChromeExtensionProvider:
     def __init__(self, command_timeout_sec: float = 2.0) -> None:
         self._transport: ExtensionTransport | None = None
         self._sessions: list[MediaSessionInfo] = []
-        self._pending: dict[str, asyncio.Future[bool]] = {}
+        self._pending: dict[str, asyncio.Future[tuple[bool, str | None]]] = {}
         self._command_timeout_sec = command_timeout_sec
         self._on_change: Callable[[], Awaitable[None]] | None = None
 
@@ -105,7 +105,7 @@ class ChromeExtensionProvider:
     def _fail_pending(self) -> None:
         for future in self._pending.values():
             if not future.done():
-                future.set_result(False)
+                future.set_result((False, "disconnected"))
         self._pending.clear()
 
     async def handle_message(self, payload: dict[str, Any]) -> None:
@@ -124,7 +124,9 @@ class ChromeExtensionProvider:
             req_id = str(payload.get("requestId") or "")
             future = self._pending.pop(req_id, None)
             if future is not None and not future.done():
-                future.set_result(bool(payload.get("ok", False)))
+                ok = bool(payload.get("ok", False))
+                reason = payload.get("reason")
+                future.set_result((ok, str(reason) if reason is not None else None))
             return
 
         if msg_type == "ping" and self._transport is not None:
@@ -142,34 +144,45 @@ class ChromeExtensionProvider:
             return []
         return list(self._sessions)
 
-    async def _send_request(self, payload: dict[str, Any]) -> bool:
+    async def _send_request(self, payload: dict[str, Any]) -> tuple[bool, str | None]:
         if self._transport is None:
-            return False
+            return False, "disconnected"
 
         req_id = uuid.uuid4().hex
         loop = asyncio.get_running_loop()
-        future: asyncio.Future[bool] = loop.create_future()
+        future: asyncio.Future[tuple[bool, str | None]] = loop.create_future()
         self._pending[req_id] = future
 
         message = {"v": 1, "requestId": req_id, **payload}
         try:
             await self._transport.send_json(message)
             return await asyncio.wait_for(future, timeout=self._command_timeout_sec)
-        except (TimeoutError, OSError, RuntimeError):
-            return False
+        except TimeoutError:
+            return False, "timeout"
+        except (OSError, RuntimeError) as exc:
+            return False, f"network_error: {exc}"
         finally:
             self._pending.pop(req_id, None)
 
-    async def execute_command(
+    async def execute_command_with_reason(
         self,
         session_id: str,
         action: MediaAction,
         value: float | None = None,
-    ) -> bool:
-        """Forward a transport control command to a Chrome tab via the extension."""
+    ) -> tuple[bool, str | None]:
+        """Forward transport command to Chrome tab and return (ok, reason)."""
         if not self.is_connected or not session_id.startswith("chrome:"):
-            return False
+            return False, "disconnected"
         tab_id = session_id[len("chrome:") :]
+
+        # 1. Idempotency check before dispatch
+        target_session = next((s for s in self._sessions if s.id == session_id), None)
+        if target_session is not None:
+            if action == "play" and target_session.status == "PLAYING":
+                return True, "already_playing"
+            if action == "pause" and target_session.status == "PAUSED":
+                return True, "already_paused"
+
         payload: dict[str, Any] = {
             "type": "command",
             "sessionId": session_id,
@@ -178,7 +191,34 @@ class ChromeExtensionProvider:
         }
         if value is not None:
             payload["value"] = value
-        return await self._send_request(payload)
+
+        ok, reason = await self._send_request(payload)
+        if ok:
+            return True, reason
+
+        # 2. Check if final state updated to expected status after timeout or false ack
+        expected_status = (
+            "PLAYING" if action == "play" else ("PAUSED" if action == "pause" else None)
+        )
+        if expected_status is not None:
+            deadline = asyncio.get_running_loop().time() + 0.35
+            while asyncio.get_running_loop().time() < deadline:
+                current = next((s for s in self._sessions if s.id == session_id), None)
+                if current is not None and current.status == expected_status:
+                    return True, "state_confirmed"
+                await asyncio.sleep(0.05)
+
+        return False, reason or "command_failed"
+
+    async def execute_command(
+        self,
+        session_id: str,
+        action: MediaAction,
+        value: float | None = None,
+    ) -> bool:
+        """Forward a transport control command to a Chrome tab via the extension."""
+        ok, _ = await self.execute_command_with_reason(session_id, action, value)
+        return ok
 
     async def set_session_volume(
         self,
@@ -199,7 +239,8 @@ class ChromeExtensionProvider:
             payload["value"] = max(0.0, min(1.0, float(level)))
         if muted is not None:
             payload["muted"] = bool(muted)
-        return await self._send_request(payload)
+        ok, _ = await self._send_request(payload)
+        return ok
 
     async def open_in_browser(
         self,
@@ -218,4 +259,5 @@ class ChromeExtensionProvider:
             payload["query"] = query
         if url is not None:
             payload["url"] = url
-        return await self._send_request(payload)
+        ok, _ = await self._send_request(payload)
+        return ok

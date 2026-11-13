@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useOptimisticSlider } from "../hooks/useOptimisticSlider";
 import type { MasterVolume, MediaAction, MediaSession } from "../types";
 import {
   cleanMediaTitle,
@@ -54,11 +55,20 @@ export function NowPlayingView({
 }: NowPlayingViewProps) {
   const [tickNowMs, setTickNowMs] = useState<number>(() => Date.now());
   const [dragPos, setDragPos] = useState<number | null>(null);
-  const [dragVol, setDragVol] = useState<number | null>(null);
+  const seekLockUntilRef = useRef<number>(0);
+
+  const masterSlider = useOptimisticSlider({
+    serverValue: masterVolume?.level ?? 0.5,
+    onCommit: (val) => onVolume("master", { value: val }),
+    throttleMs: 70,
+    lockDurationMs: 400,
+  });
 
   useEffect(() => {
-    setDragPos(null);
-  }, [session?.id]);
+    if (Date.now() >= seekLockUntilRef.current) {
+      setDragPos(null);
+    }
+  }, [session?.id, session?.position]);
 
   useEffect(() => {
     if (!session || session.status !== "PLAYING" || dragPos !== null) {
@@ -85,7 +95,7 @@ export function NowPlayingView({
       })
     : 0;
 
-  const masterLevel = dragVol ?? masterVolume?.level ?? 0.5;
+  const masterLevel = masterSlider.value;
   const masterPct = Math.round(masterLevel * 100);
   const masterMuted = masterVolume?.muted ?? false;
 
@@ -99,7 +109,8 @@ export function NowPlayingView({
 
   const commitSeek = (nextPos: number) => {
     if (!session) return;
-    setDragPos(null);
+    setDragPos(nextPos);
+    seekLockUntilRef.current = Date.now() + 500;
     onCommand(session.id, "seek", nextPos);
   };
 
@@ -394,13 +405,15 @@ export function NowPlayingView({
             step={0.01}
             disabled={!masterVolume}
             value={masterLevel}
-            onChange={(e) => {
-              const next = Number(e.target.value);
-              setDragVol(next);
-              onVolume("master", { value: next });
-            }}
-            onPointerUp={() => setDragVol(null)}
-            onTouchEnd={() => setDragVol(null)}
+            onPointerDown={masterSlider.onPointerDown}
+            onChange={(e) => masterSlider.onChange(Number(e.target.value))}
+            onPointerUp={(e) =>
+              masterSlider.onPointerUp(Number((e.target as HTMLInputElement).value))
+            }
+            onTouchEnd={(e) =>
+              masterSlider.onPointerUp(Number((e.target as HTMLInputElement).value))
+            }
+            onKeyUp={(e) => masterSlider.onPointerUp(Number((e.target as HTMLInputElement).value))}
           />
         </div>
       </section>

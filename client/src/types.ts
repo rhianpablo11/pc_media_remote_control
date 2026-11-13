@@ -80,6 +80,17 @@ export interface ErrorMessage {
   requestId?: string | null;
 }
 
+export interface AckMessage {
+  v: 1;
+  type: "ack";
+  requestId?: string | null;
+  ok: boolean;
+  clientSentAt?: number | null;
+  execMs: number;
+  target?: string | null;
+  reason?: string | null;
+}
+
 export type ConnectionStatus =
   | "connecting"
   | "connected"
@@ -109,4 +120,12 @@ export interface DiagnosticInfo {
   lastCloseTimestamp: string | null;
   lastError: string | null;
   reconnectAttempts: number;
+  // Latency & telemetry instrumentation:
+  lastRttMs?: number | null;
+  lastHostExecMs?: number | null;
+  lastNetworkMs?: number | null;
+  lastAction?: string | null;
+  avgRttMs?: number | null;
+  avgHostExecMs?: number | null;
+  bottleneckSummary?: string | null;
 }

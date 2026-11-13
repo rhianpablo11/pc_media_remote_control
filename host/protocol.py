@@ -102,6 +102,19 @@ class PongMessage(BaseModel):
     requestId: str | None = None
 
 
+class AckMessage(BaseModel):
+    """Server -> client command/volume acknowledgement with latency telemetry."""
+
+    v: Literal[1] = 1
+    type: Literal["ack"] = "ack"
+    requestId: str | None = None
+    ok: bool = True
+    clientSentAt: float | None = None
+    execMs: float = 0.0
+    target: str | None = None
+    reason: str | None = None
+
+
 class CommandMessage(BaseModel):
     """Client -> server playback command."""
 
@@ -111,6 +124,7 @@ class CommandMessage(BaseModel):
     action: MediaAction
     value: float | None = None
     requestId: str | None = None
+    clientSentAt: float | None = None
 
     @model_validator(mode="after")
     def _validate_seek_value(self) -> CommandMessage:
@@ -132,6 +146,7 @@ class VolumeMessage(BaseModel):
     value: float | None = Field(default=None, ge=0.0, le=1.0)
     muted: bool | None = None
     requestId: str | None = None
+    clientSentAt: float | None = None
 
     @model_validator(mode="after")
     def _validate_target_fields(self) -> VolumeMessage:
@@ -147,6 +162,7 @@ class SelectMessage(BaseModel):
     type: Literal["select"]
     sessionId: str
     requestId: str | None = None
+    clientSentAt: float | None = None
 
 
 class PingMessage(BaseModel):
@@ -155,6 +171,7 @@ class PingMessage(BaseModel):
     v: Literal[1]
     type: Literal["ping"]
     requestId: str | None = None
+    clientSentAt: float | None = None
 
 
 class OpenMessage(BaseModel):
@@ -166,6 +183,7 @@ class OpenMessage(BaseModel):
     query: str | None = None
     url: str | None = None
     requestId: str | None = None
+    clientSentAt: float | None = None
 
     @model_validator(mode="after")
     def _validate_open_target(self) -> OpenMessage:
@@ -268,3 +286,15 @@ def audio_app_to_payload(item: AudioAppInfo) -> AudioSessionPayload:
         volume=round(max(0.0, min(1.0, item.volume)), 3),
         muted=item.muted,
     )
+
+
+ServerMessage = Annotated[
+    StateMessage | ErrorMessage | PongMessage | AckMessage,
+    Field(discriminator="type"),
+]
+_SERVER_MESSAGE_ADAPTER: TypeAdapter[ServerMessage] = TypeAdapter(ServerMessage)
+
+
+def parse_server_message(raw: object) -> ServerMessage:
+    """Validate and parse an outgoing server JSON object against Protocol v1."""
+    return _SERVER_MESSAGE_ADAPTER.validate_python(raw)

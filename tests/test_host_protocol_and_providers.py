@@ -720,3 +720,184 @@ def test_dispatch_command_logs_host_session_status(caplog: pytest.LogCaptureFixt
         and "ativa=None" in rec.message
         for rec in caplog.records
     )
+
+
+class ManualTransport:
+    def __init__(self) -> None:
+        self.sent: list[dict[str, Any]] = []
+
+    async def send_json(self, data: Any) -> None:
+        self.sent.append(data)
+
+
+def test_chrome_extension_idempotency_and_error_reasons() -> None:
+    ext = ChromeExtensionProvider(command_timeout_sec=0.2)
+    transport = ManualTransport()
+    ext.attach(transport)
+
+    # Seed an active playing tab
+    tab_playing = {
+        "tabId": "100",
+        "title": "Video 1",
+        "status": "PLAYING",
+        "controls": {"play": True, "pause": True},
+    }
+    tab_paused = {
+        "tabId": "200",
+        "title": "Video 2",
+        "status": "PAUSED",
+        "controls": {"play": True, "pause": True},
+    }
+    asyncio.run(
+        ext.handle_message({"type": "extension_state", "tabs": [tab_playing, tab_paused]})
+    )
+
+    # 1. Idempotent play when already playing
+    ok, reason = asyncio.run(ext.execute_command_with_reason("chrome:100", "play"))
+    assert ok is True
+    assert reason == "already_playing"
+    assert len(transport.sent) == 0  # no WS round-trip needed
+
+    # 2. Idempotent pause when already paused
+    ok, reason = asyncio.run(ext.execute_command_with_reason("chrome:200", "pause"))
+    assert ok is True
+    assert reason == "already_paused"
+    assert len(transport.sent) == 0
+
+    # 3. Command error propagation with exact cause
+    async def _test_reason(error_reason: str) -> None:
+        async def _respond_ack() -> None:
+            await asyncio.sleep(0.01)
+            req_id = transport.sent[-1]["requestId"]
+            await ext.handle_message(
+                {
+                    "type": "extension_ack",
+                    "requestId": req_id,
+                    "ok": False,
+                    "reason": error_reason,
+                }
+            )
+
+        task = asyncio.create_task(_respond_ack())
+        res_ok, res_reason = await ext.execute_command_with_reason("chrome:100", "pause")
+        await task
+        assert res_ok is False
+        assert res_reason == error_reason
+
+    for r in ["tab_closed", "tab_discarded", "no_media_element", "autoplay_rejected", "timeout"]:
+        asyncio.run(_test_reason(r))
+
+    # 4. State confirmed fallback: ack is False, but session status changed to expected
+    async def _test_state_confirmed() -> None:
+        async def _respond_false_and_update() -> None:
+            await asyncio.sleep(0.02)
+            req_id = transport.sent[-1]["requestId"]
+            await ext.handle_message(
+                {
+                    "type": "extension_ack",
+                    "requestId": req_id,
+                    "ok": False,
+                    "reason": "frame_swallowed",
+                }
+            )
+            # Meanwhile, top frame starts playing and sends state
+            await ext.handle_message(
+                {
+                    "type": "extension_state",
+                    "tabs": [
+                        {**tab_paused, "status": "PLAYING"},
+                    ],
+                }
+            )
+
+        task = asyncio.create_task(_respond_false_and_update())
+        res_ok, res_reason = await ext.execute_command_with_reason("chrome:200", "play")
+        await task
+        assert res_ok is True
+        assert res_reason == "state_confirmed"
+
+    asyncio.run(_test_state_confirmed())
+
+
+def test_windows_provider_audio_cache_and_optimistic_update() -> None:
+    import time
+
+    from host.providers.base import AudioAppInfo, MasterVolumeInfo
+    from host.providers.windows import WindowsProvider
+
+    win = WindowsProvider()
+    win.invalidate_cache()
+
+    # Pre-populate cache directly to test cache hits and optimistic updates
+    win._cached_master = MasterVolumeInfo(level=0.5, muted=False, device_name="Test Speakers")
+    win._cached_master_time = time.monotonic()
+    win._cached_audio_apps = [
+        AudioAppInfo(
+            id="windows-audio:spotify.exe",
+            source="windows",
+            app="Spotify",
+            process_name="spotify.exe",
+            pid=1234,
+            active=True,
+            volume=0.8,
+            muted=False,
+        )
+    ]
+    win._cached_audio_apps_time = time.monotonic()
+
+    # Cache hit within TTL returns instantly
+    t0 = time.perf_counter()
+    master = asyncio.run(win.get_master_volume())
+    dt_master = (time.perf_counter() - t0) * 1000.0
+    assert master.level == 0.5
+    assert dt_master < 5.0  # In-memory hit is < 5ms (usually < 0.1ms)
+
+    apps = asyncio.run(win.list_audio_apps())
+    assert len(apps) == 1
+    assert apps[0].app == "Spotify"
+    assert apps[0].volume == 0.8
+
+    win.close()
+
+
+def test_host_state_ack_telemetry_and_reasons() -> None:
+    win = FakeWindowsProvider()
+    ext = ChromeExtensionProvider(command_timeout_sec=0.2)
+    transport = FakeExtensionTransport(ext)
+    ext.attach(transport)
+    coord = HostStateCoordinator(providers=[win, ext], audio_provider=win)
+
+    # 1. Successful command with requestId and clientSentAt receives AckMessage
+    t_client = 1731490000000.0
+    msg = {
+        "v": 1,
+        "type": "command",
+        "sessionId": "windows:Spotify.exe:0",
+        "action": "pause",
+        "requestId": "req-123",
+        "clientSentAt": t_client,
+    }
+    reply = asyncio.run(coord.handle_raw_client_message(msg))
+    assert reply is not None
+    assert reply.type == "ack"
+    assert reply.ok is True
+    assert reply.requestId == "req-123"
+    assert reply.clientSentAt == t_client
+    assert reply.execMs >= 0.0
+    assert reply.target == "windows:Spotify.exe:0"
+
+    # 2. Volume command with requestId receives AckMessage
+    vol_msg = {
+        "v": 1,
+        "type": "volume",
+        "target": "master",
+        "value": 0.35,
+        "requestId": "req-vol",
+        "clientSentAt": t_client,
+    }
+    vol_reply = asyncio.run(coord.handle_raw_client_message(vol_msg))
+    assert vol_reply is not None
+    assert vol_reply.type == "ack"
+    assert vol_reply.ok is True
+    assert vol_reply.requestId == "req-vol"
+    assert vol_reply.target == "master"

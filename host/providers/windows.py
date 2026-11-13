@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import ctypes
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -122,6 +124,21 @@ class WindowsProvider:
     def __init__(self) -> None:
         self._com_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pycaw-com")
         self._com_thread_state = threading.local()
+        self._cached_master: MasterVolumeInfo | None = None
+        self._cached_master_time: float = 0.0
+        self._master_cache_ttl: float = 0.4
+        self._cached_audio_apps: list[AudioAppInfo] | None = None
+        self._cached_audio_apps_time: float = 0.0
+        self._audio_apps_cache_ttl: float = 1.0
+        self._cache_lock = threading.Lock()
+
+    def invalidate_cache(self) -> None:
+        """Invalidate in-memory audio caches (useful for testing and explicit refreshes)."""
+        with self._cache_lock:
+            self._cached_master = None
+            self._cached_master_time = 0.0
+            self._cached_audio_apps = None
+            self._cached_audio_apps_time = 0.0
 
     @property
     def source(self) -> str:
@@ -431,20 +448,63 @@ class WindowsProvider:
         return updated
 
     async def get_master_volume(self) -> MasterVolumeInfo:
-        """Read default speakers master volume and mute state."""
-        return await self._run_com(self._read_master_sync)
+        """Read default speakers master volume and mute state (cached with short TTL)."""
+        now = time.monotonic()
+        with self._cache_lock:
+            if (
+                self._cached_master is not None
+                and (now - self._cached_master_time) < self._master_cache_ttl
+            ):
+                return self._cached_master
+
+        res: MasterVolumeInfo = await self._run_com(self._read_master_sync)
+        with self._cache_lock:
+            self._cached_master = res
+            self._cached_master_time = time.monotonic()
+        return res
 
     async def set_master_volume(
         self,
         level: float | None = None,
         muted: bool | None = None,
     ) -> MasterVolumeInfo:
-        """Set default speakers master volume and/or mute state."""
-        return await self._run_com(self._set_master_sync, level, muted)
+        """Set default speakers master volume and/or mute state with optimistic cache update."""
+        with self._cache_lock:
+            if self._cached_master is not None:
+                new_lvl = (
+                    max(0.0, min(1.0, float(level)))
+                    if level is not None
+                    else self._cached_master.level
+                )
+                new_muted = bool(muted) if muted is not None else self._cached_master.muted
+                self._cached_master = MasterVolumeInfo(
+                    level=new_lvl,
+                    muted=new_muted,
+                    device_name=self._cached_master.device_name,
+                )
+                self._cached_master_time = time.monotonic()
+
+        res: MasterVolumeInfo = await self._run_com(self._set_master_sync, level, muted)
+        with self._cache_lock:
+            self._cached_master = res
+            self._cached_master_time = time.monotonic()
+        return res
 
     async def list_audio_apps(self) -> list[AudioAppInfo]:
-        """List grouped per-app Core Audio sessions."""
-        return await self._run_com(self._list_audio_apps_sync)
+        """List grouped per-app Core Audio sessions (cached with TTL)."""
+        now = time.monotonic()
+        with self._cache_lock:
+            if (
+                self._cached_audio_apps is not None
+                and (now - self._cached_audio_apps_time) < self._audio_apps_cache_ttl
+            ):
+                return list(self._cached_audio_apps)
+
+        res: list[AudioAppInfo] = await self._run_com(self._list_audio_apps_sync)
+        with self._cache_lock:
+            self._cached_audio_apps = res
+            self._cached_audio_apps_time = time.monotonic()
+        return list(res)
 
     async def set_audio_app_volume(
         self,
@@ -452,8 +512,26 @@ class WindowsProvider:
         level: float | None = None,
         muted: bool | None = None,
     ) -> bool:
-        """Update per-app Core Audio volume and/or mute state."""
-        return await self._run_com(self._set_audio_app_volume_sync, app_audio_id, level, muted)
+        """Update per-app Core Audio volume and/or mute state with optimistic cache update."""
+        with self._cache_lock:
+            if self._cached_audio_apps is not None:
+                updated_list: list[AudioAppInfo] = []
+                for item in self._cached_audio_apps:
+                    if item.id == app_audio_id:
+                        new_lvl = (
+                            max(0.0, min(1.0, float(level))) if level is not None else item.volume
+                        )
+                        new_muted = bool(muted) if muted is not None else item.muted
+                        updated_list.append(replace(item, volume=new_lvl, muted=new_muted))
+                    else:
+                        updated_list.append(item)
+                self._cached_audio_apps = updated_list
+                self._cached_audio_apps_time = time.monotonic()
+
+        res: bool = await self._run_com(
+            self._set_audio_app_volume_sync, app_audio_id, level, muted
+        )
+        return res
 
     async def send_media_key(self, action: MediaAction) -> bool:
         """Send a global Win32 media key for apps without GSMTC (e.g. VLC 3.x)."""

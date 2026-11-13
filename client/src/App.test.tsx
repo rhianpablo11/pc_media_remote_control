@@ -522,6 +522,92 @@ describe("App PWA", () => {
     expect(screen.getByText("Diagnóstico de Conexão")).toBeInTheDocument();
     expect(screen.getByText("URL WebSocket")).toBeInTheDocument();
     expect(screen.getByText(/ws:\/\//)).toBeInTheDocument();
-    expect(screen.getByText(/Salvo \(tok_mobi\.\.\.\)/)).toBeInTheDocument();
+    expect(screen.getByText("Salvo")).toBeInTheDocument();
+  });
+
+  it("reconnects and re-authenticates in under 1s after close code 1006", async () => {
+    vi.useFakeTimers();
+    try {
+      localStorage.setItem("pcmedia_auth_token_v1", "tok_fast_reconnect");
+      render(<App />);
+      const ws = MockWebSocket.instances[0];
+      act(() => {
+        ws.simulateOpen();
+      });
+
+      // Simulate abnormal closure (code 1006 - e.g. screen lock or WiFi blip)
+      act(() => {
+        ws.simulateClose(1006);
+      });
+
+      // Advance timer by 450ms (< 1s)
+      act(() => {
+        vi.advanceTimersByTime(450);
+      });
+
+      expect(MockWebSocket.instances.length).toBeGreaterThanOrEqual(2);
+      const reconnectedWs = MockWebSocket.instances[MockWebSocket.instances.length - 1];
+      act(() => {
+        reconnectedWs.simulateOpen();
+      });
+
+      expect(reconnectedWs.sent).toContain(
+        JSON.stringify({ v: 1, type: "auth", token: "tok_fast_reconnect" }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reconnects immediately when document becomes visible again (visibilitychange)", () => {
+    localStorage.setItem("pcmedia_auth_token_v1", "tok_visibility_test");
+    render(<App />);
+    const ws = MockWebSocket.instances[0];
+    act(() => {
+      ws.simulateOpen();
+      ws.readyState = WebSocket.CLOSED;
+    });
+
+    Object.defineProperty(document, "visibilityState", {
+      value: "visible",
+      writable: true,
+      configurable: true,
+    });
+
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    expect(MockWebSocket.instances.length).toBeGreaterThanOrEqual(2);
+    const reconnectedWs = MockWebSocket.instances[MockWebSocket.instances.length - 1];
+    act(() => {
+      reconnectedWs.simulateOpen();
+    });
+
+    expect(reconnectedWs.sent).toContain(
+      JSON.stringify({ v: 1, type: "auth", token: "tok_visibility_test" }),
+    );
+  });
+
+  it("processes AckMessage and updates latency telemetry and error toast", () => {
+    render(<App />);
+    const ws = MockWebSocket.instances[0];
+    act(() => {
+      ws.simulateOpen();
+      ws.simulateMessage({
+        v: 1,
+        type: "ack",
+        requestId: "pwa-1",
+        ok: true,
+        clientSentAt: Date.now() - 42,
+        execMs: 8.5,
+        target: "chrome:101",
+      });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Mais" }));
+    expect(screen.getByText("RTT (Ida + Volta):")).toBeInTheDocument();
+    expect(screen.getByText("Execução no Host:")).toBeInTheDocument();
+    expect(screen.getByText(/8\.5 ms/)).toBeInTheDocument();
   });
 });

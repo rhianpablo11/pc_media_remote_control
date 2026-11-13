@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
+  AckMessage,
   ConnectionStatus,
   DiagnosticInfo,
   ErrorMessage,
@@ -67,13 +68,23 @@ export function useMediaHost(): UseMediaHostResult {
       clientHost: typeof window !== "undefined" ? window.location.host : "",
       isLoopback: isLoopbackHost(),
       hasToken: Boolean(token),
-      tokenPrefix: token ? `${token.slice(0, 8)}...` : "",
-      connectionStatus: !isLoopbackHost() && !token && !getPairingCodeFromUrl() ? "pairing_required" : "connecting",
+      tokenPrefix: "",
+      connectionStatus:
+        !isLoopbackHost() && !token && !getPairingCodeFromUrl()
+          ? "pairing_required"
+          : "connecting",
       lastCloseCode: null,
       lastCloseReason: null,
       lastCloseTimestamp: null,
       lastError: null,
       reconnectAttempts: 0,
+      lastRttMs: null,
+      lastHostExecMs: null,
+      lastNetworkMs: null,
+      lastAction: null,
+      avgRttMs: null,
+      avgHostExecMs: null,
+      bottleneckSummary: null,
     };
   });
 
@@ -207,7 +218,7 @@ export function useMediaHost(): UseMediaHostResult {
         ...prev,
         connectionStatus: "connected",
         hasToken: Boolean(token),
-        tokenPrefix: token ? `${token.slice(0, 8)}...` : "",
+        tokenPrefix: "",
         reconnectAttempts: 0,
       }));
 
@@ -223,13 +234,64 @@ export function useMediaHost(): UseMediaHostResult {
 
     socket.onmessage = (event) => {
       try {
-        const parsed = JSON.parse(String(event.data)) as StateMessage | ErrorMessage | { type: string };
+        const parsed = JSON.parse(String(event.data)) as
+          | StateMessage
+          | ErrorMessage
+          | AckMessage
+          | { type: string };
         if (parsed.type === "state") {
           const stateMsg = parsed as StateMessage;
           setState(stateMsg);
           setIsCachedState(false);
           setReceivedAtMs(Date.now());
           saveCachedState(stateMsg);
+          return;
+        }
+        if (parsed.type === "ack") {
+          const ackMsg = parsed as AckMessage;
+          const now = Date.now();
+          const rtt = ackMsg.clientSentAt ? now - ackMsg.clientSentAt : null;
+          const hostExec = ackMsg.execMs;
+          const net = rtt !== null ? Math.max(0, rtt - hostExec) : null;
+
+          setDiagnostic((prev) => {
+            const nextAvgRtt =
+              rtt !== null
+                ? prev.avgRttMs
+                  ? Math.round(prev.avgRttMs * 0.7 + rtt * 0.3)
+                  : rtt
+                : prev.avgRttMs;
+            const nextAvgHost = prev.avgHostExecMs
+              ? Math.round(prev.avgHostExecMs * 0.7 + hostExec * 0.3)
+              : hostExec;
+
+            let summary = "Wi-Fi local rápido (<100ms)";
+            if (nextAvgRtt && nextAvgRtt > 150) {
+              summary =
+                nextAvgHost > (net ?? 0)
+                  ? `Gargalo: Drivers/COM (${nextAvgHost}ms)`
+                  : `Gargalo: Rede Wi-Fi (${net ?? 0}ms)`;
+            }
+
+            return {
+              ...prev,
+              lastRttMs: rtt,
+              lastHostExecMs: hostExec,
+              lastNetworkMs: net,
+              lastAction: ackMsg.target || undefined,
+              avgRttMs: nextAvgRtt,
+              avgHostExecMs: nextAvgHost,
+              bottleneckSummary: summary,
+            };
+          });
+
+          if (!ackMsg.ok) {
+            showError(
+              ackMsg.reason
+                ? `Não foi possível concluir o comando (${ackMsg.reason}).`
+                : "Não foi possível concluir o comando.",
+            );
+          }
           return;
         }
         if (parsed.type === "error") {
@@ -284,6 +346,20 @@ export function useMediaHost(): UseMediaHostResult {
           tokenPrefix: "",
           connectionStatus: "pairing_required",
         }));
+        return;
+      }
+
+      if (event.code === 1006) {
+        // Fast reconnect for abnormal closures (screen wake / Wi-Fi transient drop)
+        setConnectionStatus("reconnecting");
+        attemptRef.current = 0;
+        const fastDelay = 400; // reconnect in under 1 second
+        setDiagnostic((prev) => ({
+          ...prev,
+          connectionStatus: "reconnecting",
+          reconnectAttempts: 1,
+        }));
+        reconnectTimerRef.current = window.setTimeout(connect, fastDelay);
         return;
       }
 
@@ -383,18 +459,27 @@ export function useMediaHost(): UseMediaHostResult {
 
     const handleResume = () => {
       if (document.visibilityState === "visible") {
+        attemptRef.current = 0;
+        clearReconnectTimer();
         const sock = wsRef.current;
-        if (!sock || sock.readyState === WebSocket.CLOSED) {
-          attemptRef.current = 0;
+        if (!sock || sock.readyState === WebSocket.CLOSED || sock.readyState === WebSocket.CLOSING) {
           connect();
+        } else if (sock.readyState === WebSocket.OPEN) {
+          try {
+            sock.send(JSON.stringify({ v: 1, type: "ping" }));
+          } catch {
+            sock.close();
+            connect();
+          }
         }
       }
     };
 
     const handleOnline = () => {
       const sock = wsRef.current;
-      if (!sock || sock.readyState === WebSocket.CLOSED) {
+      if (!sock || sock.readyState === WebSocket.CLOSED || sock.readyState === WebSocket.CLOSING) {
         attemptRef.current = 0;
+        clearReconnectTimer();
         connect();
       }
     };
@@ -425,10 +510,12 @@ export function useMediaHost(): UseMediaHostResult {
         return false;
       }
       reqSeqRef.current += 1;
+      const clientSentAt = Date.now();
       socket.send(
         JSON.stringify({
           v: 1,
           requestId: `pwa-${reqSeqRef.current}`,
+          clientSentAt,
           ...payload,
         }),
       );

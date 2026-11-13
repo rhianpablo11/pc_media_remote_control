@@ -375,75 +375,89 @@
 
     if (action === "skip_ad") {
       const skipBtn = findClickableSkipAdButton();
-      if (!skipBtn) return false;
+      if (!skipBtn) return { ok: false, reason: "skip_ad_button_not_found" };
       skipBtn.click();
       setTimeout(() => sendSnapshot(true), 150);
-      return true;
+      return { ok: true };
     }
 
     if (action === "next") {
       const nextBtn = findReadyYoutubeControl(".ytp-next-button");
-      if (!nextBtn) return false;
+      if (!nextBtn) return { ok: false, reason: "next_button_not_found" };
       nextBtn.click();
       setTimeout(() => sendSnapshot(true), 300);
-      return true;
+      return { ok: true };
     }
 
     if (action === "previous") {
       const prevBtn = findReadyYoutubeControl(".ytp-prev-button");
-      if (!prevBtn) return false;
+      if (!prevBtn) return { ok: false, reason: "prev_button_not_found" };
       prevBtn.click();
       setTimeout(() => sendSnapshot(true), 300);
-      return true;
+      return { ok: true };
     }
 
-    if (!mediaEl) return false;
+    if (!mediaEl) return { ok: false, reason: "no_media_element" };
 
     if (action === "play") {
+      if (!mediaEl.paused) {
+        sendSnapshot(true);
+        return { ok: true, reason: "already_playing" };
+      }
       try {
         await mediaEl.play();
         sendSnapshot(true);
-        return true;
-      } catch {
-        return false;
+        return { ok: true };
+      } catch (err) {
+        if (err && err.name === "NotAllowedError") {
+          return { ok: false, reason: "autoplay_rejected" };
+        }
+        return { ok: false, reason: "play_failed" };
       }
     }
 
     if (action === "pause") {
+      if (mediaEl.paused) {
+        sendSnapshot(true);
+        return { ok: true, reason: "already_paused" };
+      }
       mediaEl.pause();
       sendSnapshot(true);
-      return true;
+      return { ok: true };
     }
 
     if (action === "toggle") {
       if (mediaEl.paused) {
         try {
           await mediaEl.play();
-        } catch {
-          return false;
+        } catch (err) {
+          if (err && err.name === "NotAllowedError") {
+            return { ok: false, reason: "autoplay_rejected" };
+          }
+          return { ok: false, reason: "play_failed" };
         }
       } else {
         mediaEl.pause();
       }
       sendSnapshot(true);
-      return true;
+      return { ok: true };
     }
 
     if (action === "seek") {
       const target = helpers.computeSeekTarget(mediaEl.currentTime, mediaEl.duration, value, false);
       mediaEl.currentTime = target;
       sendSnapshot(true);
-      return true;
+      return { ok: true };
     }
 
     if (action === "seek_relative") {
       const target = helpers.computeSeekTarget(mediaEl.currentTime, mediaEl.duration, value, true);
       mediaEl.currentTime = target;
       sendSnapshot(true);
-      return true;
+      return { ok: true };
     }
 
-    return false;
+    return { ok: false, reason: "unknown_action" };
   }
 
   function applyElementVolume(level, unmuteElement) {
@@ -521,6 +535,10 @@
     if (!message || typeof message !== "object") return false;
 
     if (message.type === "request_media_state") {
+      const mediaEl = collectMediaElements();
+      if (window !== window.top && !mediaEl) {
+        return false;
+      }
       if (window.location.origin && window.location.origin !== "null") {
         window.postMessage(
           { source: ISOLATED_REQUEST_SOURCE, type: "request_snapshot" },
@@ -534,15 +552,36 @@
     }
 
     if (message.type === "media_command") {
+      const mediaEl = collectMediaElements();
+      // Crucial: Only the frame with the primary media element responds!
+      // In subframes without media elements (e.g. ad iframes), DO NOT sendResponse so we don't swallow main frame's ack.
+      if (window !== window.top && !mediaEl) {
+        return false;
+      }
+
+      const isButtonCommand = ["skip_ad", "next", "previous"].includes(message.action);
+      if (!mediaEl && !isButtonCommand) {
+        sendResponse({ ok: false, reason: "no_media_element" });
+        return false;
+      }
+
       executeMediaCommand(message.action, message.value)
-        .then((ok) => sendResponse({ ok }))
-        .catch(() => sendResponse({ ok: false }));
+        .then((result) => {
+          sendResponse(typeof result === "object" ? result : { ok: Boolean(result) });
+        })
+        .catch((err) => {
+          sendResponse({ ok: false, reason: err?.message || "execution_error" });
+        });
       return true;
     }
 
     if (message.type === "tab_media_volume") {
+      const mediaEl = collectMediaElements();
+      if (window !== window.top && !mediaEl) {
+        return false;
+      }
       const ok = applyElementVolume(message.value, message.unmuteElement);
-      sendResponse({ ok });
+      sendResponse({ ok, reason: ok ? undefined : "no_media_element" });
       return false;
     }
 

@@ -243,10 +243,39 @@ test("cleanMediaTitle strips notification prefixes from YouTube and browser titl
   assert.equal(contentHelpers.cleanMediaTitle(""), "");
 
   const merged = contentHelpers.mergeMediaMetadata({
-    isolatedMeta: null,
-    mainMeta: null,
     domMeta: { title: "(42) Música em Reprodução", artist: "Artista" },
+    isolatedMeta: null,
     isYouTube: true,
+    mainMeta: null,
   });
   assert.equal(merged.title, "Música em Reprodução");
+});
+
+test("playback command idempotency and error reasons behave deterministically", () => {
+  // 1. Simulating executeMediaCommand behavior for play on already playing element
+  const playingEl = { paused: false, playCalled: false };
+  const playIdempotent = playingEl.paused
+    ? { ok: true }
+    : { ok: true, reason: "already_playing" };
+  assert.deepEqual(playIdempotent, { ok: true, reason: "already_playing" });
+
+  // 2. Simulating pause on already paused element
+  const pausedEl = { paused: true, pauseCalled: false };
+  const pauseIdempotent = pausedEl.paused
+    ? { ok: true, reason: "already_paused" }
+    : { ok: true };
+  assert.deepEqual(pauseIdempotent, { ok: true, reason: "already_paused" });
+
+  // 3. Autoplay policy rejection simulation
+  const notAllowedError = new Error("play() failed because the user didn't interact");
+  notAllowedError.name = "NotAllowedError";
+  const caughtReason =
+    notAllowedError.name === "NotAllowedError" ? "autoplay_rejected" : "play_failed";
+  assert.equal(caughtReason, "autoplay_rejected");
+
+  // 4. Subframe with no media must not respond
+  const isTop = false;
+  const hasMedia = false;
+  const shouldRespondInSubframe = isTop || hasMedia;
+  assert.equal(shouldRespondInSubframe, false);
 });

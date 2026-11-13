@@ -268,7 +268,37 @@ export function MoreView({
           </div>
           <div className="flex justify-between border-t border-[var(--separator)] pt-2">
             <span style={{ color: "var(--text-secondary)" }}>Token Autenticação:</span>
-            <span>{diagnostic?.hasToken ? `Salvo (${diagnostic.tokenPrefix})` : "Ausente"}</span>
+            <span>{diagnostic?.hasToken ? "Salvo" : "Ausente"}</span>
+          </div>
+          <div className="flex justify-between border-t border-[var(--separator)] pt-2">
+            <span style={{ color: "var(--text-secondary)" }}>RTT (Ida + Volta):</span>
+            <span>
+              {diagnostic?.lastRttMs !== null && diagnostic?.lastRttMs !== undefined
+                ? `${diagnostic.lastRttMs} ms`
+                : "—"}
+            </span>
+          </div>
+          <div className="flex justify-between border-t border-[var(--separator)] pt-2">
+            <span style={{ color: "var(--text-secondary)" }}>Execução no Host:</span>
+            <span>
+              {diagnostic?.lastHostExecMs !== null && diagnostic?.lastHostExecMs !== undefined
+                ? `${diagnostic.lastHostExecMs} ms`
+                : "—"}
+            </span>
+          </div>
+          <div className="flex justify-between border-t border-[var(--separator)] pt-2">
+            <span style={{ color: "var(--text-secondary)" }}>Rede Wi-Fi estimada:</span>
+            <span>
+              {diagnostic?.lastNetworkMs !== null && diagnostic?.lastNetworkMs !== undefined
+                ? `${diagnostic.lastNetworkMs} ms`
+                : "—"}
+            </span>
+          </div>
+          <div className="flex justify-between border-t border-[var(--separator)] pt-2">
+            <span style={{ color: "var(--text-secondary)" }}>Diagnóstico Gargalo:</span>
+            <span className="truncate max-w-[200px] text-right font-sans">
+              {diagnostic?.bottleneckSummary || "Normal (<150ms)"}
+            </span>
           </div>
           <div className="flex justify-between border-t border-[var(--separator)] pt-2">
             <span style={{ color: "var(--text-secondary)" }}>Último Fechamento:</span>

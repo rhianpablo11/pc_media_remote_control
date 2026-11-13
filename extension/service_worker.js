@@ -69,12 +69,13 @@ function sendExtensionState() {
   });
 }
 
-function sendAck(requestId, ok) {
+function sendAck(requestId, ok, reason) {
   if (!requestId) return;
   sendJson({
     type: "extension_ack",
     requestId,
     ok: Boolean(ok),
+    reason: reason || undefined,
   });
 }
 
@@ -179,21 +180,66 @@ async function sendMessageToTab(tabId, payload) {
 async function handleHostCommand(msg) {
   const tabId = Number(msg.tabId);
   if (!Number.isInteger(tabId) || tabId <= 0) {
-    sendAck(msg.requestId, false);
+    sendAck(msg.requestId, false, "invalid_tab_id");
     return;
   }
-  const response = await sendMessageToTab(tabId, {
-    type: "media_command",
-    action: msg.action,
-    value: msg.value,
-  });
-  sendAck(msg.requestId, Boolean(response && response.ok));
+  let tab;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch {
+    sendAck(msg.requestId, false, "tab_closed");
+    return;
+  }
+  if (!tab) {
+    sendAck(msg.requestId, false, "tab_closed");
+    return;
+  }
+  if (tab.discarded) {
+    sendAck(msg.requestId, false, "tab_discarded");
+    return;
+  }
+
+  let response = null;
+  try {
+    const msgPromise = sendMessageToTab(tabId, {
+      type: "media_command",
+      action: msg.action,
+      value: msg.value,
+    });
+    const timeoutPromise = new Promise((resolve) =>
+      setTimeout(() => resolve({ ok: false, reason: "timeout" }), 1800)
+    );
+    response = await Promise.race([msgPromise, timeoutPromise]);
+  } catch {
+    response = { ok: false, reason: "no_media_element" };
+  }
+
+  if (response && response.ok) {
+    sendAck(msg.requestId, true, response.reason);
+  } else {
+    sendAck(msg.requestId, false, response?.reason || "command_failed");
+  }
 }
 
 async function handleHostVolume(msg) {
   const tabId = Number(msg.tabId);
   if (!Number.isInteger(tabId) || tabId <= 0) {
-    sendAck(msg.requestId, false);
+    sendAck(msg.requestId, false, "invalid_tab_id");
+    return;
+  }
+  let tab;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch {
+    sendAck(msg.requestId, false, "tab_closed");
+    return;
+  }
+  if (!tab) {
+    sendAck(msg.requestId, false, "tab_closed");
+    return;
+  }
+  if (tab.discarded) {
+    sendAck(msg.requestId, false, "tab_discarded");
     return;
   }
 
@@ -211,12 +257,13 @@ async function handleHostVolume(msg) {
         current.muted = current.tabMuted || Boolean(current.elementMuted);
       }
     } catch {
-      sendAck(msg.requestId, false);
+      sendAck(msg.requestId, false, "tab_mute_failed");
       return;
     }
   }
 
   let elementApplied = true;
+  let elementReason;
   if (typeof msg.value === "number" || msg.muted === false) {
     const res = await sendMessageToTab(tabId, {
       type: "tab_media_volume",
@@ -224,11 +271,13 @@ async function handleHostVolume(msg) {
       unmuteElement: msg.muted === false,
     });
     elementApplied = Boolean(res && res.ok);
+    elementReason = res?.reason;
   }
 
   sendExtensionState();
   await persistDiagnostics();
-  sendAck(msg.requestId, tabMuteApplied || elementApplied);
+  const ok = tabMuteApplied || elementApplied;
+  sendAck(msg.requestId, ok, ok ? undefined : (elementReason || "volume_failed"));
 }
 
 async function handleHostOpen(msg) {
