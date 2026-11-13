@@ -9,8 +9,10 @@ import {
   triggerHaptic,
 } from "../utils";
 import {
+  ExitFullscreenIcon,
   FastForwardAdIcon,
   Forward10Icon,
+  FullscreenIcon,
   LayersIcon,
   MusicNoteIcon,
   NextIcon,
@@ -138,19 +140,42 @@ export function NowPlayingView({
             ) : null}
           </div>
 
-          <button
-            type="button"
-            onClick={onOpenSessions}
-            aria-label="Selecionar sessão de mídia"
-            className="touch-btn inline-flex items-center gap-1.5 rounded-full px-3.5 text-xs font-semibold shrink-0"
-            style={{
-              backgroundColor: "var(--accent-soft)",
-              color: "var(--accent)",
-            }}
-          >
-            <LayersIcon className="h-4 w-4" />
-            <span>Sessões ({sessionCount})</span>
-          </button>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {session && (session.controls.fullscreen ?? true) ? (
+              <button
+                type="button"
+                onClick={() => onCommand(session.id, "toggle_fullscreen")}
+                aria-label={session.isFullscreen ? "Sair da tela cheia" : "Tela cheia"}
+                title={session.isFullscreen ? "Sair da tela cheia" : "Tela cheia"}
+                className="touch-btn inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold"
+                style={{
+                  backgroundColor: session.isFullscreen ? "var(--accent)" : "var(--surface-elevated)",
+                  color: session.isFullscreen ? "var(--accent-contrast)" : "var(--text)",
+                }}
+              >
+                {session.isFullscreen ? (
+                  <ExitFullscreenIcon className="h-3.5 w-3.5" />
+                ) : (
+                  <FullscreenIcon className="h-3.5 w-3.5" />
+                )}
+                <span>Tela cheia</span>
+              </button>
+            ) : null}
+
+            <button
+              type="button"
+              onClick={onOpenSessions}
+              aria-label="Selecionar sessão de mídia"
+              className="touch-btn inline-flex items-center gap-1.5 rounded-full px-3.5 text-xs font-semibold shrink-0"
+              style={{
+                backgroundColor: "var(--accent-soft)",
+                color: "var(--accent)",
+              }}
+            >
+              <LayersIcon className="h-4 w-4" />
+              <span>Sessões ({sessionCount})</span>
+            </button>
+          </div>
         </div>
 
         {!session ? (

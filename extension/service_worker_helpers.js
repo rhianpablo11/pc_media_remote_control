@@ -74,6 +74,7 @@ export function mergeTabEntry(tabId, contentPayload, chromeTab = null) {
     tabMuted,
     elementMuted,
     active,
+    isFullscreen: Boolean(contentPayload.isFullscreen),
     controls: contentPayload.controls || {
       play: true,
       pause: true,
@@ -82,6 +83,7 @@ export function mergeTabEntry(tabId, contentPayload, chromeTab = null) {
       previous: false,
       seek: true,
       skipAd: false,
+      fullscreen: true,
     },
     metadataProbe: contentPayload.metadataProbe || null,
   };
@@ -109,6 +111,7 @@ export function serializeTabsForHost(tabEntries) {
     volume: item.volume,
     muted: Boolean(item.muted),
     active: Boolean(item.active),
+    isFullscreen: Boolean(item.isFullscreen),
     controls: item.controls,
   }));
 }

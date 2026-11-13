@@ -9,9 +9,15 @@ import {
   mergeTabEntry,
   serializeTabsForHost,
 } from "./service_worker_helpers.js";
+import {
+  extractYtInitialData,
+  isValidVideoId,
+  parseSearchResults,
+} from "./youtube_search_parser.js";
 
 const tabStates = new Map();
 const tabFrameStates = new Map();
+const pendingPlayTabs = new Map();
 let ws = null;
 let reconnectTimer = null;
 let keepaliveTimer = null;
@@ -223,6 +229,23 @@ async function handleHostCommand(msg) {
 
   if (response && response.ok) {
     sendAck(msg.requestId, true, response.reason);
+  } else if (
+    msg.action === "toggle_fullscreen" ||
+    msg.action === "fullscreen"
+  ) {
+    try {
+      if (typeof tab.windowId === "number") {
+        const win = await chrome.windows.get(tab.windowId);
+        const nextState = win.state === "fullscreen" ? "normal" : "fullscreen";
+        await chrome.windows.update(tab.windowId, { state: nextState, focused: true });
+        sendAck(msg.requestId, true, `window_${nextState}`);
+        return;
+      }
+    } catch (err) {
+      sendAck(msg.requestId, false, err?.message || "fullscreen_failed");
+      return;
+    }
+    sendAck(msg.requestId, false, response?.reason || "command_failed");
   } else {
     sendAck(msg.requestId, false, response?.reason || "command_failed");
   }
@@ -292,6 +315,156 @@ async function handleHostVolume(msg) {
   sendAck(msg.requestId, ok, ok ? undefined : (elementReason || "volume_failed"));
 }
 
+async function handleHostSearch(msg) {
+  const requestId = msg.requestId;
+  const query = typeof msg.query === "string" ? msg.query.trim() : "";
+  if (!query) {
+    sendJson({
+      type: "search_results",
+      requestId,
+      ok: false,
+      query: "",
+      results: [],
+      reason: "empty_query",
+    });
+    return;
+  }
+
+  try {
+    const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+    const resp = await fetch(searchUrl, {
+      credentials: "include",
+      headers: {
+        "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+      },
+    });
+
+    if (!resp.ok) {
+      sendJson({
+        type: "search_results",
+        requestId,
+        ok: false,
+        query,
+        results: [],
+        reason: `http_${resp.status}`,
+      });
+      return;
+    }
+
+    const htmlText = await resp.text();
+    const initialData = extractYtInitialData(htmlText);
+    if (!initialData) {
+      sendJson({
+        type: "search_results",
+        requestId,
+        ok: false,
+        query,
+        results: [],
+        reason: "yt_initial_data_not_found",
+      });
+      return;
+    }
+
+    const results = parseSearchResults(initialData, 25);
+    sendJson({
+      type: "search_results",
+      requestId,
+      ok: true,
+      query,
+      results,
+    });
+  } catch (err) {
+    sendJson({
+      type: "search_results",
+      requestId,
+      ok: false,
+      query,
+      results: [],
+      reason: err?.message || "fetch_failed",
+    });
+  }
+}
+
+async function handleHostPlayVideo(msg) {
+  const requestId = msg.requestId;
+  const videoId = typeof msg.videoId === "string" ? msg.videoId.trim() : "";
+  if (!isValidVideoId(videoId)) {
+    sendAck(requestId, false, "invalid_video_id");
+    return;
+  }
+
+  const targetUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
+  const mode = msg.mode === "new_tab" ? "new_tab" : "current_tab";
+  const shouldFullscreen = Boolean(msg.fullscreen);
+
+  // If previous video was in fullscreen, preserve fullscreen unless explicitly requested false
+  let preserveFullscreen = shouldFullscreen;
+  if (msg.fullscreen === undefined || msg.fullscreen === null) {
+    if (msg.tabId && tabStates.has(Number(msg.tabId))) {
+      preserveFullscreen = Boolean(tabStates.get(Number(msg.tabId))?.isFullscreen);
+    } else {
+      for (const entry of tabStates.values()) {
+        if (entry.active && entry.isFullscreen) {
+          preserveFullscreen = true;
+          break;
+        }
+      }
+    }
+  }
+
+  try {
+    let targetTab = null;
+
+    if (mode === "current_tab") {
+      if (msg.tabId && Number.isInteger(Number(msg.tabId))) {
+        const candidate = await chrome.tabs.get(Number(msg.tabId)).catch(() => null);
+        if (candidate && !candidate.discarded) {
+          targetTab = candidate;
+        }
+      }
+
+      if (!targetTab) {
+        for (const [id, entry] of tabStates.entries()) {
+          if (entry.url && entry.url.includes("youtube.com")) {
+            const candidate = await chrome.tabs.get(id).catch(() => null);
+            if (candidate && !candidate.discarded) {
+              targetTab = candidate;
+              if (entry.active || entry.status === "PLAYING") break;
+            }
+          }
+        }
+      }
+
+      if (targetTab && targetTab.id) {
+        await chrome.tabs.update(targetTab.id, { url: targetUrl, active: true });
+        if (typeof targetTab.windowId === "number") {
+          await chrome.windows.update(targetTab.windowId, { focused: true }).catch(() => {});
+          if (preserveFullscreen) {
+            await chrome.windows.update(targetTab.windowId, { state: "fullscreen" }).catch(() => {});
+          }
+        }
+        pendingPlayTabs.set(targetTab.id, { fullscreen: preserveFullscreen, ts: Date.now() });
+        sendAck(requestId, true, "navigated_existing_tab");
+        return;
+      }
+    }
+
+    const createdTab = await chrome.tabs.create({ url: targetUrl, active: true });
+    if (createdTab && typeof createdTab.windowId === "number") {
+      await chrome.windows.update(createdTab.windowId, { focused: true }).catch(() => {});
+      if (preserveFullscreen) {
+        await chrome.windows.update(createdTab.windowId, { state: "fullscreen" }).catch(() => {});
+      }
+    }
+    if (createdTab && createdTab.id) {
+      pendingPlayTabs.set(createdTab.id, { fullscreen: preserveFullscreen, ts: Date.now() });
+    }
+    sendAck(requestId, true, "created_new_tab");
+  } catch (err) {
+    sendAck(requestId, false, err?.message || "play_video_failed");
+  }
+}
+
 async function handleHostOpen(msg) {
   const targetUrl = buildOpenUrl(msg);
   if (!targetUrl) {
@@ -341,6 +514,17 @@ async function handleHostMessage(rawData) {
 
   if (msg.type === "open") {
     await handleHostOpen(msg);
+    return;
+  }
+
+  if (msg.type === "search") {
+    await handleHostSearch(msg);
+    return;
+  }
+
+  if (msg.type === "play_video") {
+    await handleHostPlayVideo(msg);
+    return;
   }
 }
 
@@ -475,6 +659,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
+  pendingPlayTabs.delete(tabId);
   tabFrameStates.delete(tabId);
   if (tabStates.delete(tabId)) {
     sendExtensionState();
@@ -483,6 +668,17 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status === "complete" && pendingPlayTabs.has(tabId)) {
+    const pending = pendingPlayTabs.get(tabId);
+    pendingPlayTabs.delete(tabId);
+    setTimeout(() => {
+      sendMessageToTab(tabId, {
+        type: "ensure_playback",
+        fullscreen: pending?.fullscreen,
+      }).catch(() => {});
+    }, 600);
+  }
+
   if (changeInfo.url && !isTrackableWebUrl(changeInfo.url)) {
     tabFrameStates.delete(tabId);
     if (tabStates.delete(tabId)) {

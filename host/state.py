@@ -21,6 +21,9 @@ from host.protocol import (
     OpenMessage,
     PingMessage,
     PongMessage,
+    SearchMessage,
+    SearchResultItem,
+    SearchResultsMessage,
     SelectMessage,
     StateMessage,
     VolumeMessage,
@@ -108,6 +111,8 @@ class HostStateCoordinator:
         self._state_lock = asyncio.Lock()
         self._broadcast_task: asyncio.Task[None] | None = None
         self._broadcast_pending_force: bool = False
+        self._last_search_time: float = 0.0
+        self._search_rate_limit_sec: float = 1.0
 
     @property
     def has_clients(self) -> bool:
@@ -397,6 +402,80 @@ class HostStateCoordinator:
                 )
             return None
 
+        if isinstance(msg, SearchMessage):
+            now = time.monotonic()
+            if (now - self._last_search_time) < self._search_rate_limit_sec:
+                return SearchResultsMessage(
+                    requestId=msg.requestId or "",
+                    ok=False,
+                    query=msg.query,
+                    results=[],
+                    reason="rate_limited",
+                    error="Limite de buscas atingido. Aguarde um instante.",
+                )
+            self._last_search_time = now
+
+            chrome = self._providers_by_source.get("chrome")
+            if chrome is None or not getattr(chrome, "is_connected", False):
+                fallback_url = (
+                    f"https://www.youtube.com/results?search_query={msg.query.replace(' ', '+')}"
+                )
+                return SearchResultsMessage(
+                    requestId=msg.requestId or "",
+                    ok=False,
+                    query=msg.query,
+                    results=[],
+                    fallbackUrl=fallback_url,
+                    reason="extension_disconnected",
+                    error="Extensão Chrome não conectada.",
+                )
+
+            search_fn = getattr(chrome, "search_youtube", None)
+            if not callable(search_fn):
+                return SearchResultsMessage(
+                    requestId=msg.requestId or "",
+                    ok=False,
+                    query=msg.query,
+                    results=[],
+                    reason="search_not_supported",
+                )
+
+            ok, raw_results, reason = await search_fn(msg.query)
+            items: list[SearchResultItem] = []
+            for item in raw_results:
+                try:
+                    items.append(
+                        SearchResultItem(
+                            id=str(item.get("id")),
+                            title=str(item.get("title") or ""),
+                            channel=str(item.get("channel") or ""),
+                            duration=str(item.get("duration") or ""),
+                            views=str(item.get("views") or ""),
+                            thumbnail=str(item.get("thumbnail") or ""),
+                            isLive=bool(item.get("isLive", False)),
+                            isShorts=bool(item.get("isShorts", False)),
+                        )
+                    )
+                except Exception:
+                    continue
+
+            fallback_url = (
+                f"https://www.youtube.com/results?search_query={msg.query.replace(' ', '+')}"
+            )
+            return SearchResultsMessage(
+                requestId=msg.requestId or "",
+                ok=ok,
+                query=msg.query,
+                results=items,
+                fallbackUrl=fallback_url if not ok else None,
+                reason=reason,
+                error=(
+                    "Não foi possível extrair resultados da busca do YouTube."
+                    if not ok
+                    else None
+                ),
+            )
+
         return None
 
     async def _dispatch_open(self, msg: OpenMessage) -> bool:
@@ -409,28 +488,50 @@ class HostStateCoordinator:
         return bool(await open_fn(mode=msg.mode, query=msg.query, url=msg.url))
 
     async def _dispatch_command(self, msg: CommandMessage) -> tuple[bool, str | None]:
-        known_status = self._last_session_statuses.get(msg.sessionId, "UNKNOWN")
+        if msg.action == "play_video":
+            chrome = self._providers_by_source.get("chrome")
+            if chrome is None or not getattr(chrome, "is_connected", False):
+                return False, "extension_disconnected"
+            play_fn = getattr(chrome, "play_video", None)
+            if not callable(play_fn):
+                return False, "play_video_not_supported"
+            return await play_fn(
+                video_id=msg.videoId or "",
+                mode=msg.mode or "current_tab",
+                fullscreen=msg.fullscreen,
+                session_id=msg.sessionId,
+            )
+
+        target_session_id = msg.sessionId
+        if not target_session_id:
+            target_session_id = self._selected_session_id
+        if not target_session_id and self._last_session_statuses:
+            target_session_id = next(iter(self._last_session_statuses.keys()))
+        if not target_session_id:
+            return False, "no_active_session"
+
+        known_status = self._last_session_statuses.get(target_session_id, "UNKNOWN")
         logger.info(
             "Despachando comando action=%s session=%s (status_host=%s, ativa=%s)",
             msg.action,
-            msg.sessionId,
+            target_session_id,
             known_status,
             self._selected_session_id,
         )
-        if msg.sessionId == self._fallback_session_id:
+        if target_session_id == self._fallback_session_id:
             ok = await self._audio_provider.send_media_key(msg.action)
             return (ok, None if ok else "media_key_failed")
 
-        source = msg.sessionId.split(":", 1)[0]
+        source = target_session_id.split(":", 1)[0]
         provider = self._providers_by_source.get(source)
         if provider is None:
             return (False, "provider_not_found")
 
         dispatch_fn = getattr(provider, "execute_command_with_reason", None)
         if callable(dispatch_fn):
-            return await dispatch_fn(msg.sessionId, msg.action, msg.value)
+            return await dispatch_fn(target_session_id, msg.action, msg.value)
 
-        ok = await provider.execute_command(msg.sessionId, msg.action, msg.value)
+        ok = await provider.execute_command(target_session_id, msg.action, msg.value)
         return (ok, None if ok else "command_failed")
 
     async def _dispatch_volume(self, msg: VolumeMessage) -> bool:

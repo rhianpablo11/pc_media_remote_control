@@ -6,6 +6,8 @@ import type {
   ErrorMessage,
   MediaAction,
   PairedDevicePublic,
+  SearchMessage,
+  SearchResultsMessage,
   StateMessage,
 } from "../types";
 import {
@@ -35,6 +37,11 @@ export interface UseMediaHostResult {
   sendVolume: (target: string, opts: { value?: number; muted?: boolean }) => boolean;
   selectSession: (sessionId: string) => boolean;
   sendOpen: (mode: "youtube_search" | "url", payload: { query?: string; url?: string }) => boolean;
+  searchYouTube: (query: string) => Promise<SearchResultsMessage>;
+  playVideo: (
+    videoId: string,
+    opts?: { mode?: "current_tab" | "new_tab"; fullscreen?: boolean; sessionId?: string },
+  ) => boolean;
   reconnectNow: () => void;
   pairWithPin: (pin: string) => Promise<{ ok: boolean; error?: string }>;
   pairedDevices: PairedDevicePublic[];
@@ -94,6 +101,7 @@ export function useMediaHost(): UseMediaHostResult {
   const attemptRef = useRef<number>(0);
   const disposedRef = useRef<boolean>(false);
   const reqSeqRef = useRef<number>(0);
+  const pendingSearchRef = useRef<Map<string, (res: SearchResultsMessage) => void>>(new Map());
   const pairingInProgressRef = useRef<boolean>(false);
   const pairingRequiredRef = useRef<boolean>(!isLoopbackHost() && !loadAuthToken() && !getPairingCodeFromUrl());
 
@@ -247,6 +255,16 @@ export function useMediaHost(): UseMediaHostResult {
           saveCachedState(stateMsg);
           return;
         }
+        if (parsed.type === "search_results") {
+          const resMsg = parsed as SearchResultsMessage;
+          const reqId = resMsg.requestId;
+          if (reqId && pendingSearchRef.current.has(reqId)) {
+            const resolver = pendingSearchRef.current.get(reqId);
+            pendingSearchRef.current.delete(reqId);
+            if (resolver) resolver(resMsg);
+          }
+          return;
+        }
         if (parsed.type === "ack") {
           const ackMsg = parsed as AckMessage;
           const now = Date.now();
@@ -319,6 +337,19 @@ export function useMediaHost(): UseMediaHostResult {
     };
 
     socket.onclose = (event) => {
+      for (const resolver of pendingSearchRef.current.values()) {
+        resolver({
+          v: 1,
+          type: "search_results",
+          ok: false,
+          query: "",
+          results: [],
+          reason: "disconnected",
+          error: "Conexão perdida com o computador.",
+        });
+      }
+      pendingSearchRef.current.clear();
+
       if (wsRef.current === socket) {
         wsRef.current = null;
       }
@@ -576,6 +607,76 @@ export function useMediaHost(): UseMediaHostResult {
     [sendPayload],
   );
 
+  const searchYouTube = useCallback(
+    (query: string): Promise<SearchResultsMessage> => {
+      const socket = wsRef.current;
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        return Promise.resolve({
+          v: 1,
+          type: "search_results",
+          ok: false,
+          query,
+          results: [],
+          reason: "no_connection",
+          error: "Sem conexão com o notebook.",
+        });
+      }
+
+      reqSeqRef.current += 1;
+      const reqId = `search-${reqSeqRef.current}`;
+      const payload: SearchMessage = {
+        v: 1,
+        type: "search",
+        query,
+        requestId: reqId,
+        clientSentAt: Date.now(),
+      };
+
+      return new Promise<SearchResultsMessage>((resolve) => {
+        const timeoutTimer = window.setTimeout(() => {
+          if (pendingSearchRef.current.has(reqId)) {
+            pendingSearchRef.current.delete(reqId);
+            resolve({
+              v: 1,
+              type: "search_results",
+              ok: false,
+              query,
+              results: [],
+              reason: "timeout",
+              error: "Tempo limite esgotado ao buscar no YouTube.",
+            });
+          }
+        }, 9000);
+
+        pendingSearchRef.current.set(reqId, (result) => {
+          window.clearTimeout(timeoutTimer);
+          resolve(result);
+        });
+
+        socket.send(JSON.stringify(payload));
+      });
+    },
+    [],
+  );
+
+  const playVideo = useCallback(
+    (
+      videoId: string,
+      opts?: { mode?: "current_tab" | "new_tab"; fullscreen?: boolean; sessionId?: string },
+    ): boolean => {
+      triggerHaptic(12);
+      return sendPayload({
+        type: "command",
+        action: "play_video",
+        videoId,
+        mode: opts?.mode ?? "current_tab",
+        fullscreen: opts?.fullscreen,
+        sessionId: opts?.sessionId,
+      });
+    },
+    [sendPayload],
+  );
+
   return {
     state,
     isCachedState,
@@ -587,6 +688,8 @@ export function useMediaHost(): UseMediaHostResult {
     sendVolume,
     selectSession,
     sendOpen,
+    searchYouTube,
+    playVideo,
     reconnectNow,
     pairWithPin,
     pairedDevices,

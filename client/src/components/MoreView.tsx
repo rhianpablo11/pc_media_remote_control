@@ -37,7 +37,6 @@ export function MoreView({
   diagnostic,
   onClearTokenAndRepair,
 }: MoreViewProps) {
-  const [ytQuery, setYtQuery] = useState("");
   const [openUrl, setOpenUrl] = useState("");
   const [revokingId, setRevokingId] = useState<string | null>(null);
 
@@ -46,15 +45,6 @@ export function MoreView({
       onRefreshDevices();
     }
   }, [onRefreshDevices]);
-
-  const submitYoutube = (e: FormEvent) => {
-    e.preventDefault();
-    const trimmed = ytQuery.trim();
-    if (!trimmed) return;
-    if (onOpen("youtube_search", { query: trimmed })) {
-      setYtQuery("");
-    }
-  };
 
   const submitUrl = (e: FormEvent) => {
     e.preventDefault();
@@ -88,39 +78,11 @@ export function MoreView({
 
   return (
     <div className="flex flex-col gap-4">
-      {/* 1. Abrir no Chrome */}
+      {/* 1. Abrir link no Chrome */}
       <section className="card-surface p-5 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
         <h2 className="mb-3 text-base font-semibold" style={{ color: "var(--text)" }}>
-          Abrir no Chrome
+          Abrir link no Chrome
         </h2>
-
-        <form onSubmit={submitYoutube} className="mb-3 flex gap-2">
-          <input
-            type="search"
-            value={ytQuery}
-            onChange={(e) => setYtQuery(e.target.value)}
-            placeholder="Buscar no YouTube"
-            aria-label="Buscar no YouTube"
-            disabled={!extensionConnected}
-            className="min-h-[44px] min-w-0 flex-1 rounded-2xl px-3.5 text-sm outline-none disabled:opacity-50"
-            style={{
-              backgroundColor: "var(--surface-elevated)",
-              color: "var(--text)",
-              border: "1px solid var(--separator)",
-            }}
-          />
-          <button
-            type="submit"
-            disabled={!extensionConnected || !ytQuery.trim()}
-            className="touch-btn shrink-0 rounded-2xl px-4 text-sm font-semibold disabled:opacity-40"
-            style={{
-              backgroundColor: "var(--accent)",
-              color: "var(--accent-contrast)",
-            }}
-          >
-            Buscar
-          </button>
-        </form>
 
         <form onSubmit={submitUrl} className="flex gap-2">
           <input

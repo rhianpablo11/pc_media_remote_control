@@ -340,6 +340,7 @@
       duration: Math.round(duration * 100) / 100,
       volume: Math.round(volume * 1000) / 1000,
       elementMuted,
+      isFullscreen: Boolean(document.fullscreenElement),
       controls: {
         play: Boolean(mediaEl || hasDetachedMedia),
         pause: Boolean(mediaEl || hasDetachedMedia),
@@ -348,6 +349,7 @@
         previous: Boolean(prevBtn),
         seek: Boolean((mediaEl || hasDetachedMedia) && (duration > 0 || position > 0)),
         skipAd: Boolean(skipBtn),
+        fullscreen: true,
       },
       metadataProbe: merged.probe,
     };
@@ -433,6 +435,32 @@
       prevBtn.click();
       setTimeout(() => sendSnapshot(true), 300);
       return { ok: true };
+    }
+
+    if (action === "toggle_fullscreen" || action === "fullscreen") {
+      const shouldFullscreen =
+        action === "fullscreen" ? Boolean(value) : !document.fullscreenElement;
+      if (!shouldFullscreen && document.fullscreenElement) {
+        try {
+          await document.exitFullscreen();
+          setTimeout(() => sendSnapshot(true), 100);
+          return { ok: true, reason: "exited_fullscreen" };
+        } catch {
+          return { ok: false, reason: "exit_fullscreen_failed" };
+        }
+      }
+      if (shouldFullscreen && !document.fullscreenElement) {
+        const target =
+          mediaEl || document.querySelector("#movie_player") || document.documentElement;
+        try {
+          await target.requestFullscreen();
+          setTimeout(() => sendSnapshot(true), 100);
+          return { ok: true, reason: "entered_fullscreen" };
+        } catch {
+          return { ok: false, reason: "user_activation_needed" };
+        }
+      }
+      return { ok: true, reason: "already_in_state" };
     }
 
     if (!mediaEl) {
@@ -656,6 +684,8 @@
     );
   }
 
+  document.addEventListener("fullscreenchange", () => sendSnapshot(true));
+
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (!message || typeof message !== "object") return false;
 
@@ -682,6 +712,16 @@
       return false;
     }
 
+    if (message.type === "ensure_playback") {
+      const mediaEl = collectMediaElements();
+      if (mediaEl && mediaEl.paused) {
+        mediaEl.play().catch(() => {});
+      }
+      setTimeout(() => sendSnapshot(true), 300);
+      sendResponse({ ok: true });
+      return false;
+    }
+
     if (message.type === "media_command") {
       const mediaEl = collectMediaElements();
       const hasDetached = Boolean(
@@ -696,7 +736,9 @@
         return false;
       }
 
-      const isButtonCommand = ["skip_ad", "next", "previous"].includes(message.action);
+      const isButtonCommand = ["skip_ad", "next", "previous", "toggle_fullscreen", "fullscreen"].includes(
+        message.action
+      );
       if (!mediaEl && !hasDetached && !isButtonCommand) {
         sendResponse({ ok: false, reason: "no_media_element" });
         return false;

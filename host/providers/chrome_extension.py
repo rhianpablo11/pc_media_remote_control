@@ -42,6 +42,7 @@ def parse_chrome_tab_session(raw_tab: dict[str, Any]) -> MediaSessionInfo:
         previous=bool(raw_controls.get("previous", False)),
         seek=bool(raw_controls.get("seek", True)),
         skip_ad=bool(raw_controls.get("skipAd", raw_controls.get("skip_ad", False))),
+        fullscreen=bool(raw_controls.get("fullscreen", True)),
     )
     volume_raw = raw_tab.get("volume")
     volume = max(0.0, min(1.0, float(volume_raw))) if volume_raw is not None else None
@@ -64,6 +65,7 @@ def parse_chrome_tab_session(raw_tab: dict[str, Any]) -> MediaSessionInfo:
         volume=volume,
         muted=muted,
         is_system_active=bool(raw_tab.get("active", False)),
+        is_fullscreen=bool(raw_tab.get("isFullscreen", raw_tab.get("is_fullscreen", False))),
     )
 
 
@@ -74,6 +76,9 @@ class ChromeExtensionProvider:
         self._transport: ExtensionTransport | None = None
         self._sessions: list[MediaSessionInfo] = []
         self._pending: dict[str, asyncio.Future[tuple[bool, str | None]]] = {}
+        self._pending_search: dict[
+            str, asyncio.Future[tuple[bool, list[dict[str, Any]], str | None]]
+        ] = {}
         self._command_timeout_sec = command_timeout_sec
         self._on_change: Callable[[], Awaitable[None]] | None = None
 
@@ -107,6 +112,10 @@ class ChromeExtensionProvider:
             if not future.done():
                 future.set_result((False, "disconnected"))
         self._pending.clear()
+        for s_future in self._pending_search.values():
+            if not s_future.done():
+                s_future.set_result((False, [], "disconnected"))
+        self._pending_search.clear()
 
     async def handle_message(self, payload: dict[str, Any]) -> None:
         """Process an incoming JSON message from the Chrome extension."""
@@ -127,6 +136,16 @@ class ChromeExtensionProvider:
                 ok = bool(payload.get("ok", False))
                 reason = payload.get("reason")
                 future.set_result((ok, str(reason) if reason is not None else None))
+            return
+
+        if msg_type == "search_results":
+            req_id = str(payload.get("requestId") or "")
+            s_future = self._pending_search.pop(req_id, None)
+            if s_future is not None and not s_future.done():
+                ok = bool(payload.get("ok", False))
+                results = payload.get("results") or []
+                reason = payload.get("reason")
+                s_future.set_result((ok, results, str(reason) if reason is not None else None))
             return
 
         if msg_type == "ping" and self._transport is not None:
@@ -242,6 +261,7 @@ class ChromeExtensionProvider:
         ok, _ = await self._send_request(payload)
         return ok
 
+
     async def open_in_browser(
         self,
         mode: Literal["youtube_search", "url"],
@@ -261,3 +281,61 @@ class ChromeExtensionProvider:
             payload["url"] = url
         ok, _ = await self._send_request(payload)
         return ok
+
+    async def search_youtube(
+        self,
+        query: str,
+        timeout_sec: float = 8.0,
+    ) -> tuple[bool, list[dict[str, Any]], str | None]:
+        """Request YouTube search results from the extension service worker."""
+        if not self.is_connected or self._transport is None:
+            return False, [], "extension_disconnected"
+
+        req_id = uuid.uuid4().hex
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[tuple[bool, list[dict[str, Any]], str | None]] = loop.create_future()
+        self._pending_search[req_id] = future
+
+        payload = {
+            "v": 1,
+            "type": "search",
+            "requestId": req_id,
+            "query": query,
+        }
+        try:
+            await self._transport.send_json(payload)
+            return await asyncio.wait_for(future, timeout=timeout_sec)
+        except TimeoutError:
+            return False, [], "search_timeout"
+        except (OSError, RuntimeError) as exc:
+            return False, [], f"network_error: {exc}"
+        finally:
+            self._pending_search.pop(req_id, None)
+
+    async def play_video(
+        self,
+        video_id: str,
+        mode: str = "current_tab",
+        fullscreen: bool | None = None,
+        session_id: str | None = None,
+    ) -> tuple[bool, str | None]:
+        """Request the extension to open or navigate to a YouTube video by ID."""
+        if not self.is_connected:
+            return False, "extension_disconnected"
+
+        tab_id = None
+        if session_id and session_id.startswith("chrome:"):
+            tab_id = session_id[len("chrome:") :]
+
+        payload: dict[str, Any] = {
+            "type": "play_video",
+            "videoId": video_id,
+            "mode": mode,
+        }
+        if fullscreen is not None:
+            payload["fullscreen"] = fullscreen
+        if tab_id:
+            payload["tabId"] = tab_id
+
+        return await self._send_request(payload)
+

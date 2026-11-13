@@ -397,12 +397,6 @@ describe("App PWA", () => {
     // Switch to Mais tab
     fireEvent.click(screen.getByRole("button", { name: "Mais" }));
 
-    // Shortened placeholders
-    fireEvent.change(screen.getByPlaceholderText("Buscar no YouTube"), {
-      target: { value: "synthwave live" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Buscar" }));
-
     fireEvent.change(screen.getByPlaceholderText("Colar link"), {
       target: { value: "https://youtube.com/watch?v=123" },
     });
@@ -419,12 +413,6 @@ describe("App PWA", () => {
 
     const openMsgs = ws.sent.slice(2).map((s) => JSON.parse(s));
     expect(openMsgs[0]).toMatchObject({
-      v: 1,
-      type: "open",
-      mode: "youtube_search",
-      query: "synthwave live",
-    });
-    expect(openMsgs[1]).toMatchObject({
       v: 1,
       type: "open",
       mode: "url",
@@ -609,5 +597,147 @@ describe("App PWA", () => {
     expect(screen.getByText("RTT (Ida + Volta):")).toBeInTheDocument();
     expect(screen.getByText("Execução no Host:")).toBeInTheDocument();
     expect(screen.getByText(/8\.5 ms/)).toBeInTheDocument();
+  });
+
+  it("supports Buscar tab: search query, results, play_video, history chips, fallback, and fullscreen toggle", async () => {
+    render(<App />);
+    const ws = MockWebSocket.instances[0];
+    act(() => {
+      ws.simulateOpen();
+      ws.simulateMessage(makeSampleState());
+    });
+
+    // Verify fullscreen toggle button on NowPlayingView
+    const fullscreenBtn = screen.getByRole("button", { name: "Tela cheia" });
+    expect(fullscreenBtn).toBeInTheDocument();
+    fireEvent.click(fullscreenBtn);
+    const cmdMsgs = ws.sent.map((s) => JSON.parse(s));
+    expect(cmdMsgs[0]).toMatchObject({
+      v: 1,
+      type: "command",
+      sessionId: "chrome:11",
+      action: "toggle_fullscreen",
+    });
+
+    // Switch to Buscar tab
+    const searchNavBtn = screen.getByRole("button", { name: "Buscar" });
+    fireEvent.click(searchNavBtn);
+
+    // Initial empty state
+    expect(screen.getByText("Buscar e Tocar Vídeos")).toBeInTheDocument();
+
+    const searchInput = screen.getByPlaceholderText("Buscar vídeos no YouTube...");
+    fireEvent.change(searchInput, { target: { value: "lofi hip hop" } });
+
+    // Submit search
+    const submitBtn = screen.getByRole("button", { name: "Pesquisar vídeos" });
+    fireEvent.click(submitBtn);
+
+    // Verify search message sent to host
+    const searchSent = ws.sent.map((s) => JSON.parse(s)).find((m) => m.type === "search");
+    expect(searchSent).toBeDefined();
+    expect(searchSent).toMatchObject({
+      v: 1,
+      type: "search",
+      query: "lofi hip hop",
+    });
+
+    // Simulate search_results message from host
+    await act(async () => {
+      ws.simulateMessage({
+        v: 1,
+        type: "search_results",
+        requestId: searchSent.requestId,
+        ok: true,
+        query: "lofi hip hop",
+        results: [
+          {
+            id: "jfKfPfyJRdk",
+            title: "lofi hip hop radio - beats to relax/study to",
+            channel: "Lofi Girl",
+            duration: "",
+            views: "1.2M visualizações",
+            thumbnail: "https://i.ytimg.com/vi/jfKfPfyJRdk/hqdefault.jpg",
+            isLive: true,
+          },
+          {
+            id: "5qap5aO4i9A",
+            title: "Lofi Hip Hop Chill Mix",
+            channel: "ChilledCow",
+            duration: "24:15",
+            views: "850K visualizações",
+            thumbnail: "https://i.ytimg.com/vi/5qap5aO4i9A/hqdefault.jpg",
+            isLive: false,
+          },
+        ],
+      });
+      await Promise.resolve();
+    });
+
+    // Assert results are rendered
+    expect(screen.getByText("lofi hip hop radio - beats to relax/study to")).toBeInTheDocument();
+    expect(screen.getByText("AO VIVO")).toBeInTheDocument();
+    expect(screen.getByText("Lofi Hip Hop Chill Mix")).toBeInTheDocument();
+    expect(screen.getByText("24:15")).toBeInTheDocument();
+
+    // Click "Tocar agora" on first video
+    const playNowButtons = screen.getAllByRole("button", { name: /Tocar agora/i });
+    fireEvent.click(playNowButtons[0]);
+
+    const playMsgs = ws.sent.map((s) => JSON.parse(s)).filter((m) => m.action === "play_video");
+    expect(playMsgs[0]).toMatchObject({
+      v: 1,
+      type: "command",
+      action: "play_video",
+      videoId: "jfKfPfyJRdk",
+      mode: "current_tab",
+      fullscreen: true,
+    });
+
+    // Click "Nova aba" on second video
+    const newTabButtons = screen.getAllByRole("button", { name: "Nova aba" });
+    fireEvent.click(newTabButtons[1]);
+
+    const playMsgs2 = ws.sent.map((s) => JSON.parse(s)).filter((m) => m.action === "play_video");
+    expect(playMsgs2[1]).toMatchObject({
+      v: 1,
+      type: "command",
+      action: "play_video",
+      videoId: "5qap5aO4i9A",
+      mode: "new_tab",
+      fullscreen: true,
+    });
+
+    // Test error state with fallback button
+    fireEvent.change(searchInput, { target: { value: "error query" } });
+    fireEvent.click(screen.getByRole("button", { name: "Pesquisar vídeos" }));
+    const errorSearchMsg = ws.sent.map((s) => JSON.parse(s)).find((m) => m.query === "error query");
+
+    await act(async () => {
+      ws.simulateMessage({
+        v: 1,
+        type: "search_results",
+        requestId: errorSearchMsg.requestId,
+        ok: false,
+        query: "error query",
+        results: [],
+        error: "Extensão Chrome offline.",
+      });
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("Falha na busca")).toBeInTheDocument();
+    expect(screen.getByText("Extensão Chrome offline.")).toBeInTheDocument();
+    const fallbackBtn = screen.getByRole("button", { name: "Abrir busca no notebook" });
+    fireEvent.click(fallbackBtn);
+
+    const openSearchSent = ws.sent.map((s) => JSON.parse(s)).find((m) => m.type === "open" && m.mode === "youtube_search");
+    expect(openSearchSent).toBeDefined();
+    expect(openSearchSent).toMatchObject({
+      v: 1,
+      type: "open",
+      mode: "youtube_search",
+      query: "error query",
+    });
   });
 });

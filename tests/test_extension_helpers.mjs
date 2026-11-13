@@ -10,6 +10,17 @@ import {
   mergeTabEntry,
   serializeTabsForHost,
 } from "../extension/service_worker_helpers.js";
+import {
+  extractYtInitialData,
+  isValidVideoId,
+  parseSearchResults,
+} from "../extension/youtube_search_parser.js";
+
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const require = createRequire(import.meta.url);
 const contentHelpers = require("../extension/content_helpers.js");
@@ -330,3 +341,56 @@ test("mergeMediaMetadata falls back to OpenGraph and cleans site suffixes on gen
   assert.equal(generic.probe.domReadable, true);
   assert.equal(generic.probe.mainReadable, false);
 });
+
+test("isValidVideoId strictly validates 11-char YouTube video ids", () => {
+  assert.equal(isValidVideoId("dQw4w9WgXcQ"), true);
+  assert.equal(isValidVideoId("rFZHOHl-L8A"), true);
+  assert.equal(isValidVideoId("n61ULEU7CO0"), true);
+  assert.equal(isValidVideoId("_a-12345678"), true);
+
+  // Rejeições de segurança
+  assert.equal(isValidVideoId(""), false);
+  assert.equal(isValidVideoId("short"), false);
+  assert.equal(isValidVideoId("toolongvideoId12345"), false);
+  assert.equal(isValidVideoId("https://youtube.com"), false);
+  assert.equal(isValidVideoId("dQw4w9WgXc;"), false);
+  assert.equal(isValidVideoId("../../../etc"), false);
+  assert.equal(isValidVideoId(null), false);
+  assert.equal(isValidVideoId(undefined), false);
+});
+
+test("extractYtInitialData extracts JSON from script block and handles malformed gracefully", () => {
+  const validHtml = '<html><head><script>var ytInitialData = {"foo": "bar", "num": 42};</script></head></html>';
+  const extracted = extractYtInitialData(validHtml);
+  assert.deepEqual(extracted, { foo: "bar", num: 42 });
+
+  const windowFormat = '<script>window["ytInitialData"] = {"test": true};</script>';
+  assert.deepEqual(extractYtInitialData(windowFormat), { test: true });
+
+  // Falha graciosa
+  assert.equal(extractYtInitialData(""), null);
+  assert.equal(extractYtInitialData("<html>sem script algum</html>"), null);
+  assert.equal(extractYtInitialData("<script>var ytInitialData = {malformed json..."), null);
+});
+
+test("parseSearchResults parses real fixture, filters ads/channels/playlists and extracts video metadata", () => {
+  const fixturePath = path.join(__dirname, "fixtures", "youtube_search_initial_data.json");
+  const rawJson = JSON.parse(fs.readFileSync(fixturePath, "utf-8"));
+
+  const results = parseSearchResults(rawJson, 10);
+  assert.ok(results.length > 0, "Deveria retornar ao menos 1 resultado da fixture");
+
+  for (const vid of results) {
+    assert.ok(isValidVideoId(vid.id), `ID inválido: ${vid.id}`);
+    assert.ok(vid.title && vid.title.length > 0, "Vídeo deve ter título");
+    assert.ok(typeof vid.channel === "string", "Canal deve ser string");
+    assert.ok(typeof vid.duration === "string", "Duração deve ser string");
+    assert.ok(typeof vid.thumbnail === "string", "Thumbnail deve ser string");
+    assert.ok(typeof vid.isLive === "boolean", "isLive deve ser boolean");
+  }
+
+  // Verifica que respeita maxResults
+  const limited = parseSearchResults(rawJson, 2);
+  assert.equal(limited.length, 2);
+});
+

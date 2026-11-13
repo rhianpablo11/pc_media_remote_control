@@ -18,6 +18,8 @@ from host.providers.base import (
     PlaybackControls,
 )
 
+YOUTUBE_VIDEO_ID_REGEX = re.compile(r"^[A-Za-z0-9_-]{11}$")
+
 
 class ControlsPayload(BaseModel):
     """Supported transport controls for a session."""
@@ -29,6 +31,7 @@ class ControlsPayload(BaseModel):
     previous: bool = False
     seek: bool = False
     skipAd: bool = False
+    fullscreen: bool = False
 
 
 class SessionPayload(BaseModel):
@@ -49,6 +52,7 @@ class SessionPayload(BaseModel):
     volume: float | None = None
     muted: bool | None = None
     isSystemActive: bool = False
+    isFullscreen: bool = False
 
 
 class MasterVolumePayload(BaseModel):
@@ -120,20 +124,26 @@ class CommandMessage(BaseModel):
 
     v: Literal[1]
     type: Literal["command"]
-    sessionId: str
+    sessionId: str | None = None
     action: MediaAction
     value: float | None = None
+    videoId: str | None = None
+    mode: Literal["current_tab", "new_tab"] | None = None
+    fullscreen: bool | None = None
     requestId: str | None = None
     clientSentAt: float | None = None
 
     @model_validator(mode="after")
-    def _validate_seek_value(self) -> CommandMessage:
-        if self.action == "seek" and (
-            self.value is None or not math.isfinite(self.value) or self.value < 0
+    def _validate_command(self) -> CommandMessage:
+        if self.action in {"seek", "seek_relative"}:
+            if self.value is None or not math.isfinite(self.value):
+                raise ValueError("O comando 'seek'/'seek_relative' exige 'value' numérico.")
+            if self.action == "seek" and self.value < 0:
+                raise ValueError("O comando 'seek' exige 'value' >= 0 em segundos.")
+        if self.action == "play_video" and (
+            not self.videoId or not YOUTUBE_VIDEO_ID_REGEX.match(self.videoId)
         ):
-            raise ValueError("O comando 'seek' exige 'value' >= 0 em segundos.")
-        if self.action == "seek_relative" and (self.value is None or not math.isfinite(self.value)):
-            raise ValueError("O comando 'seek_relative' exige 'value' finito em segundos.")
+            raise ValueError("O comando 'play_video' exige 'videoId' de 11 caracteres válido.")
         return self
 
 
@@ -212,8 +222,61 @@ class AuthMessage(BaseModel):
     requestId: str | None = None
 
 
+class SearchMessage(BaseModel):
+    """Client -> server request to search YouTube via the extension."""
+
+    v: Literal[1] = 1
+    type: Literal["search"] = "search"
+    query: str
+    requestId: str | None = None
+    clientSentAt: float | None = None
+
+    @model_validator(mode="after")
+    def _validate_query(self) -> SearchMessage:
+        cleaned = self.query.strip() if self.query else ""
+        if not cleaned:
+            raise ValueError("O comando 'search' exige 'query' não vazia.")
+        if len(cleaned) > 120:
+            cleaned = cleaned[:120]
+        self.query = cleaned
+        return self
+
+
+class SearchResultItem(BaseModel):
+    """Single parsed video search result."""
+
+    id: str
+    title: str
+    channel: str = ""
+    duration: str = ""
+    views: str = ""
+    thumbnail: str = ""
+    isLive: bool = False
+    isShorts: bool = False
+
+
+class SearchResultsMessage(BaseModel):
+    """Server -> client response with parsed YouTube video search results."""
+
+    v: Literal[1] = 1
+    type: Literal["search_results"] = "search_results"
+    requestId: str | None = None
+    ok: bool = True
+    query: str = ""
+    results: list[SearchResultItem] = Field(default_factory=list)
+    fallbackUrl: str | None = None
+    error: str | None = None
+    reason: str | None = None
+
+
 ClientMessage = Annotated[
-    CommandMessage | VolumeMessage | SelectMessage | PingMessage | OpenMessage | AuthMessage,
+    CommandMessage
+    | VolumeMessage
+    | SelectMessage
+    | PingMessage
+    | OpenMessage
+    | AuthMessage
+    | SearchMessage,
     Field(discriminator="type"),
 ]
 _CLIENT_MESSAGE_ADAPTER: TypeAdapter[ClientMessage] = TypeAdapter(ClientMessage)
@@ -258,10 +321,12 @@ def session_to_payload(session: MediaSessionInfo) -> SessionPayload:
             previous=c.previous,
             seek=c.seek,
             skipAd=c.skip_ad,
+            fullscreen=c.fullscreen,
         ),
         volume=round(session.volume, 3) if session.volume is not None else None,
         muted=session.muted,
         isSystemActive=session.is_system_active,
+        isFullscreen=session.is_fullscreen,
     )
 
 
@@ -289,7 +354,7 @@ def audio_app_to_payload(item: AudioAppInfo) -> AudioSessionPayload:
 
 
 ServerMessage = Annotated[
-    StateMessage | ErrorMessage | PongMessage | AckMessage,
+    StateMessage | ErrorMessage | PongMessage | AckMessage | SearchResultsMessage,
     Field(discriminator="type"),
 ]
 _SERVER_MESSAGE_ADAPTER: TypeAdapter[ServerMessage] = TypeAdapter(ServerMessage)

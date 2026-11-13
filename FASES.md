@@ -1,6 +1,6 @@
 # Fases — PC Media Control
 
-**Fase atual: 5.1**
+**Fase atual: 6**
 
 Regra: concluir a fase, marcar os checkboxes, commitar, parar e reportar. Só avançar quando o usuário autorizar.
 
@@ -72,7 +72,17 @@ Objetivo: descobrir o que o Windows realmente nos entrega, antes de construir qu
 
 **Aceite:** autostart desacoplado de pastas voláteis/OneDrive; extensão permanente acessível pelo menu da bandeja.
 
-## Fase 6 — Modo touchpad/teclado remoto (opcional)
+## Fase 6 — Busca e troca de vídeo pelo celular
+- [x] Busca no YouTube sem API key via extensão (extração de `ytInitialData` no service worker com perfil do Chrome)
+- [x] Módulo parser isolado de busca com testes baseados em fixtures reais salvas, filtrando anúncios e rotulando Shorts/Lives
+- [x] Protocolo: mensagem `search` / `search_results`, ação `play_video` com validação estrita de `videoId` (`^[A-Za-z0-9_-]{11}$`) e opções "Tocar agora" e "Nova aba"
+- [x] Suporte a Tela Cheia (toggle na tela Tocando agora e opção ao tocar vídeo, com restauração automática de fullscreen)
+- [x] Cliente PWA: nova aba "Buscar" na barra inferior, histórico local de buscas no celular, cards de resultado e tratamento gracioso de falha com fallback
+- [x] Segurança: busca restrita a aparelhos pareados e rate limiting no host
+
+**Aceite:** do celular, busco no YouTube, vejo os resultados com capa/título/duração/canal, toco em "Tocar agora" e o vídeo passa a rodar no notebook em tela cheia sem precisar tocar no computador.
+
+## Fase 7 — Modo touchpad/teclado remoto (opcional)
 - [ ] Tela de touchpad (mover cursor, clique, rolagem) e teclado de texto
 - [ ] Ligado/desligado nas configurações por segurança
 

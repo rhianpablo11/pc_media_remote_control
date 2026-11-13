@@ -8,8 +8,14 @@ Transforme seu notebook ou PC (Windows) numa central de mídia controlada pelo c
 
 - **Controle Unificado de Mídia:**
   - **Spotify e apps do Windows:** controle via GSMTC (Global System Media Transport Controls) nativo do Windows.
-  - **Google Chrome multi-abas:** extensão MV3 que lista cada aba do YouTube individualmente, permitindo play, pause, seek (±10s), pular anúncio (clicando no botão nativo "Pular"), busca e volume individual por aba.
+  - **Google Chrome multi-abas:** extensão MV3 que lista cada aba do YouTube individualmente, permitindo play, pause, seek (±10s), pular anúncio (clicando no botão nativo "Pular"), alternância de tela cheia e volume individual por aba.
   - **Fallback global:** suporte a players sem GSMTC (ex.: VLC 3.x) via teclas multimídia globais e volume por processo via Core Audio.
+- **Busca e Troca de Vídeos pelo Celular:**
+  - Aba **"Buscar"** dedicada no celular: pesquise vídeos do YouTube diretamente sem necessidade de API key ou servidores externos.
+  - Resultados em cards ricos com miniatura 16:9, canal, duração/ao vivo e contagem de visualizações.
+  - Ações rápidas: "Tocar agora" (reutiliza a aba aberta ou ativa do YouTube no PC) e "Nova aba".
+  - Controle de **Tela Cheia (Fullscreen)**: botão toggle na tela "Tocando agora", opção ao tocar o vídeo e persistência automática de tela cheia ao trocar de vídeo.
+  - Histórico de buscas recentes salvo localmente no celular (localStorage) com chips clicáveis.
 - **Mixer de Volume:**
   - Volume mestre do sistema com mute.
   - Volume e silenciamento individual para cada aba do Chrome.

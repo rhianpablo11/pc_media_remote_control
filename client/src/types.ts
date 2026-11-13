@@ -15,7 +15,10 @@ export type MediaAction =
   | "previous"
   | "seek"
   | "seek_relative"
-  | "skip_ad";
+  | "skip_ad"
+  | "play_video"
+  | "toggle_fullscreen"
+  | "fullscreen";
 
 export interface ControlsPayload {
   play: boolean;
@@ -25,6 +28,7 @@ export interface ControlsPayload {
   previous: boolean;
   seek: boolean;
   skipAd: boolean;
+  fullscreen?: boolean;
 }
 
 export interface MediaSession {
@@ -43,6 +47,7 @@ export interface MediaSession {
   volume: number | null;
   muted: boolean | null;
   isSystemActive: boolean;
+  isFullscreen?: boolean;
 }
 
 export interface MasterVolume {
@@ -98,7 +103,38 @@ export type ConnectionStatus =
   | "pairing_required";
 
 export type ThemeMode = "auto" | "light" | "dark";
-export type ActiveTab = "now_playing" | "volume" | "more";
+export type ActiveTab = "now_playing" | "volume" | "search" | "more";
+
+export interface SearchResultItem {
+  id: string;
+  title: string;
+  channel: string;
+  duration: string;
+  views?: string;
+  thumbnail: string;
+  isLive: boolean;
+  isShorts?: boolean;
+}
+
+export interface SearchResultsMessage {
+  v: 1;
+  type: "search_results";
+  requestId?: string | null;
+  ok: boolean;
+  query: string;
+  results: SearchResultItem[];
+  fallbackUrl?: string | null;
+  error?: string | null;
+  reason?: string | null;
+}
+
+export interface SearchMessage {
+  v: 1;
+  type: "search";
+  query: string;
+  requestId?: string;
+  clientSentAt?: number;
+}
 
 export interface PairedDevicePublic {
   id: string;

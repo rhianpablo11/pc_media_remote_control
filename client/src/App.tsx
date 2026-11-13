@@ -3,11 +3,13 @@ import {
   CompassIcon,
   CloseIcon,
   NowPlayingTabIcon,
+  SearchIcon,
   SlidersIcon,
 } from "./components/Icons";
 import { MoreView } from "./components/MoreView";
 import { NowPlayingView } from "./components/NowPlayingView";
 import { PairingPlaceholder } from "./components/PairingPlaceholder";
+import { SearchView } from "./components/SearchView";
 import { SessionSheet } from "./components/SessionSheet";
 import { VolumeView } from "./components/VolumeView";
 import { useMediaHost } from "./hooks/useMediaHost";
@@ -48,6 +50,8 @@ export function App() {
     sendVolume,
     selectSession,
     sendOpen,
+    searchYouTube,
+    playVideo,
     reconnectNow,
     pairWithPin,
     pairedDevices,
@@ -148,6 +152,13 @@ export function App() {
             onVolume={sendVolume}
             onOpenSessions={() => setSessionsOpen(true)}
           />
+        ) : activeTab === "search" ? (
+          <SearchView
+            extensionConnected={state?.extensionConnected ?? false}
+            onSearch={searchYouTube}
+            onPlayVideo={playVideo}
+            onOpenFallback={(q) => sendOpen("youtube_search", { query: q })}
+          />
         ) : activeTab === "volume" ? (
           <VolumeView
             masterVolume={state?.masterVolume ?? null}
@@ -175,7 +186,7 @@ export function App() {
 
       <nav
         aria-label="Navegação principal"
-        className="fixed bottom-0 left-1/2 z-40 grid w-full max-w-[430px] -translate-x-1/2 grid-cols-3 border-t px-2 pt-1.5 pb-[calc(0.45rem+env(safe-area-inset-bottom))]"
+        className="fixed bottom-0 left-1/2 z-40 grid w-full max-w-[430px] -translate-x-1/2 grid-cols-4 border-t px-2 pt-1.5 pb-[calc(0.45rem+env(safe-area-inset-bottom))]"
         style={{
           backgroundColor: "var(--surface)",
           borderColor: "var(--separator)",
@@ -192,6 +203,19 @@ export function App() {
         >
           <NowPlayingTabIcon className="h-5 w-5" />
           <span>Tocando</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab("search")}
+          aria-current={activeTab === "search" ? "page" : undefined}
+          className="touch-btn flex min-h-[52px] flex-col items-center justify-center gap-0.5 rounded-2xl text-[11px] font-semibold"
+          style={{
+            color: activeTab === "search" ? "var(--accent)" : "var(--text-secondary)",
+          }}
+        >
+          <SearchIcon className="h-5 w-5" />
+          <span>Buscar</span>
         </button>
 
         <button

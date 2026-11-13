@@ -23,6 +23,9 @@ MediaAction = Literal[
     "seek",
     "seek_relative",
     "skip_ad",
+    "play_video",
+    "toggle_fullscreen",
+    "fullscreen",
 ]
 
 
@@ -37,6 +40,7 @@ class PlaybackControls:
     previous: bool = False
     seek: bool = False
     skip_ad: bool = False
+    fullscreen: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +62,7 @@ class MediaSessionInfo:
     volume: float | None = None
     muted: bool | None = None
     is_system_active: bool = False
+    is_fullscreen: bool = False
 
 
 @dataclass(frozen=True, slots=True)
