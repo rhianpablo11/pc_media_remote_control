@@ -82,6 +82,7 @@ def run_doctor(port: int = 8765) -> int:
 
     # 3. Windows Firewall Rules
     print("[3/5] Regras no Firewall do Windows:")
+    has_named_rule = False
     try:
         fw_cmd = (
             "Get-NetFirewallRule -DisplayName '*PC Media Control*' -ErrorAction SilentlyContinue | "
@@ -101,23 +102,46 @@ def run_doctor(port: int = 8765) -> int:
             for r in rules_data:
                 name = r.get("DisplayName")
                 enabled = r.get("Enabled")
-                print(f"  [OK] Regra ativa encontrada: {name} (Habilitada: {enabled})")
+                has_named_rule = True
+                print(f"  [OK] Regra nominal encontrada: {name} (Habilitada: {enabled})")
         else:
-            print("  [AVISO] Nenhuma regra com o nome 'PC Media Control' encontrada no Firewall.")
-            print("          Execute como Administrador: .\\scripts\\allow_firewall.ps1")
+            print("  [INFO] Nenhuma regra nominal 'PC Media Control' encontrada no Firewall.")
+            print("         (O acesso na LAN ainda pode estar liberado via regra para python.exe,")
+            print("          porta genérica ou política permissiva da sub-rede local).")
+            print("         Para registrar regra dedicada: execute .\\scripts\\allow_firewall.cmd")
     except Exception as exc:  # noqa: BLE001
-        print(f"  Erro ao inspecionar firewall: {exc}")
+        print(f"  Erro ao inspecionar firewall via PowerShell: {exc}")
     print()
 
-    # 4. Port Listening Check
-    print(f"[4/5] Verificação de escuta na porta {port}:")
+    # 4. Port Listening & LAN TCP Connectivity Check
+    print(f"[4/5] Conectividade TCP na porta {port} (Localhost e IP da LAN):")
+    loopback_ok = False
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.settimeout(0.5)
-        res_code = sock.connect_ex(("127.0.0.1", port))
-        if res_code == 0:
-            print(f"  [OK] A porta {port} já está em uso (o host parece estar em execução).")
-        else:
-            print(f"  A porta {port} está livre (o host não está rodando no momento).")
+        sock.settimeout(0.8)
+        loopback_ok = sock.connect_ex(("127.0.0.1", port)) == 0
+
+    lan_ok = False
+    if chosen_ip and chosen_ip != "127.0.0.1":
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(1.2)
+            lan_ok = sock.connect_ex((chosen_ip, port)) == 0
+
+    if lan_ok:
+        print(f"  [OK] A porta {port} está ABERTA e ACESSÍVEL via IP da LAN ({chosen_ip}:{port})!")
+        print("       O host está respondendo na rede; conexões do celular devem funcionar.")
+        if not has_named_rule:
+            print("       (Conexão confirmada mesmo sem regra nominal 'PC Media Control').")
+    elif loopback_ok:
+        print(f"  [AVISO] A porta {port} está aberta em 127.0.0.1, mas INACESSÍVEL na LAN:")
+        print(f"          {chosen_ip}:{port} não respondeu.")
+        print("          Possíveis causas:")
+        print("          1. O host foi iniciado sem a flag --lan (escutando só em localhost).")
+        print("             Execute: .\\.venv\\Scripts\\python.exe -m host --lan")
+        print("          2. O Firewall do Windows está bloqueando conexões externas.")
+        print("             Execute como Administrador: .\\scripts\\allow_firewall.cmd")
+    else:
+        print(f"  A porta {port} está livre (o host não está rodando no momento).")
+        print("  Para iniciar na LAN: .\\.venv\\Scripts\\python.exe -m host --lan")
     print()
 
     # 5. AP Isolation & Hotspot Guidance

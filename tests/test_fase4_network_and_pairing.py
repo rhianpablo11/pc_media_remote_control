@@ -325,9 +325,12 @@ def test_ws_origin_validation(tmp_path: Path) -> None:
     app, _ = _build_test_app(tmp_path)
     client = TestClient(app)
 
-    with pytest.raises(WebSocketDisconnect), client.websocket_connect(
-        "/ws",
-        headers={"Origin": "http://unauthorized-evil.com"},
+    with (
+        pytest.raises(WebSocketDisconnect),
+        client.websocket_connect(
+            "/ws",
+            headers={"Origin": "http://unauthorized-evil.com"},
+        ),
     ):
         pass
 
@@ -376,9 +379,12 @@ def test_ws_extension_rejects_non_loopback(tmp_path: Path) -> None:
 
     # Non-loopback is rejected even with valid extension origin
     lan_client = TestClient(app, client=("192.168.1.55", 54321))
-    with pytest.raises(WebSocketDisconnect), lan_client.websocket_connect(
-        "/ws/extension",
-        headers={"Origin": ext_origin},
+    with (
+        pytest.raises(WebSocketDisconnect),
+        lan_client.websocket_connect(
+            "/ws/extension",
+            headers={"Origin": ext_origin},
+        ),
     ):
         pass
 
@@ -390,3 +396,85 @@ def test_ws_extension_rejects_non_loopback(tmp_path: Path) -> None:
     ) as ws_ext:
         # Should stay open and accept json
         ws_ext.send_json({"type": "tabs_update", "tabs": []})
+
+
+@pytest.mark.anyio
+async def test_async_mdns_publisher_lifecycle() -> None:
+    from host.network import MdnsPublisher
+
+    publisher = MdnsPublisher(lan_ip="192.168.1.100", port=8765, hostname="testpc")
+    with patch("zeroconf.asyncio.AsyncZeroconf") as mock_azc_cls:
+        mock_azc = MagicMock()
+        mock_azc.async_register_service = MagicMock()
+        mock_azc.async_unregister_service = MagicMock()
+        mock_azc.async_close = MagicMock()
+
+        # Configurar retorno assíncrono para os métodos async
+        async def fake_async(*args: Any, **kwargs: Any) -> None:
+            return None
+
+        mock_azc.async_register_service.side_effect = fake_async
+        mock_azc.async_unregister_service.side_effect = fake_async
+        mock_azc.async_close.side_effect = fake_async
+        mock_azc_cls.return_value = mock_azc
+
+        started = await publisher.async_start()
+        assert started is True
+        mock_azc.async_register_service.assert_called_once()
+
+        await publisher.async_stop()
+        mock_azc.async_unregister_service.assert_called_once()
+        mock_azc.async_close.assert_called_once()
+
+
+def test_ws_lan_rejects_and_logs_invalid_host(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    app, _ = _build_test_app(tmp_path)
+    lan_client = TestClient(app, client=("192.168.1.55", 54321))
+
+    # Test rejection with invalid host
+    with (
+        pytest.raises(WebSocketDisconnect),
+        caplog.at_level("WARNING"),
+        lan_client.websocket_connect(
+            "/ws",
+            headers={
+                "Host": "evil-attacker.example.com:8765",
+                "Origin": "http://192.168.1.100:8765",
+            },
+        ),
+    ):
+        pass
+
+    assert any("Host inválido" in record.message for record in caplog.records)
+
+
+def test_doctor_tcp_lan_connectivity_output() -> None:
+    from host.__main__ import run_doctor
+
+    with (
+        patch("host.__main__.list_lan_interfaces") as mock_ifaces,
+        patch("subprocess.run") as mock_subproc,
+        patch("socket.socket") as mock_sock_cls,
+        patch("builtins.print") as mock_print,
+    ):
+        mock_ifaces.return_value = [
+            LanInterface("Wi-Fi", "192.168.15.4", is_virtual=False, is_private=True),
+        ]
+        # Simula PowerShell retornando sem erros
+        mock_res = MagicMock()
+        mock_res.returncode = 1
+        mock_res.stdout = ""
+        mock_subproc.return_value = mock_res
+
+        # Simula socket conectando com sucesso na LAN
+        mock_sock = MagicMock()
+        mock_sock.connect_ex.return_value = 0
+        mock_sock_cls.return_value.__enter__.return_value = mock_sock
+
+        exit_code = run_doctor(port=8765)
+        assert exit_code == 0
+
+        printed_lines = [call.args[0] for call in mock_print.call_args_list if call.args]
+        assert any("ABERTA e ACESSÍVEL via IP da LAN" in line for line in printed_lines)

@@ -482,6 +482,19 @@ describe("App PWA", () => {
       }),
     );
     expect(localStorage.getItem("pcmedia_auth_token_v1")).toBe("tok-new-123");
+
+    // After pairing, WebSocket should immediately connect and send auth frame
+    expect(MockWebSocket.instances.length).toBeGreaterThanOrEqual(2);
+    const newWs = MockWebSocket.instances[MockWebSocket.instances.length - 1];
+    act(() => {
+      newWs.simulateOpen();
+    });
+    expect(newWs.sent.length).toBeGreaterThanOrEqual(1);
+    expect(JSON.parse(newWs.sent[0])).toEqual({
+      v: 1,
+      type: "auth",
+      token: "tok-new-123",
+    });
   });
 
   it("shows pairing screen immediately on LAN when no token is stored", () => {
@@ -494,5 +507,21 @@ describe("App PWA", () => {
     expect(screen.getByText("Dispositivo não pareado")).toBeInTheDocument();
     // No WebSocket should be opened
     expect(MockWebSocket.instances.length).toBe(0);
+  });
+
+  it("displays connection diagnostic panel in More view with live socket info", () => {
+    localStorage.setItem("pcmedia_auth_token_v1", "tok_mobile_demo_123");
+    render(<App />);
+    const ws = MockWebSocket.instances[0];
+    act(() => {
+      ws.simulateOpen();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Mais" }));
+
+    expect(screen.getByText("Diagnóstico de Conexão")).toBeInTheDocument();
+    expect(screen.getByText("URL WebSocket")).toBeInTheDocument();
+    expect(screen.getByText(/ws:\/\//)).toBeInTheDocument();
+    expect(screen.getByText(/Salvo \(tok_mobi\.\.\.\)/)).toBeInTheDocument();
   });
 });

@@ -54,9 +54,7 @@ def parse_volume_level(raw: str) -> float:
 
     val = float(text)
     if not 0.0 <= val <= 1.0:
-        raise ValueError(
-            f"Volume deve estar entre 0.0 e 1.0 (ou use sufixo %, ex: 50%): {raw!r}"
-        )
+        raise ValueError(f"Volume deve estar entre 0.0 e 1.0 (ou use sufixo %, ex: 50%): {raw!r}")
     return val
 
 

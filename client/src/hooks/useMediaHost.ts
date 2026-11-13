@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   ConnectionStatus,
+  DiagnosticInfo,
   ErrorMessage,
   MediaAction,
   PairedDevicePublic,
@@ -38,6 +39,8 @@ export interface UseMediaHostResult {
   pairedDevices: PairedDevicePublic[];
   refreshPairedDevices: () => Promise<void>;
   revokeDevice: (deviceId: string) => Promise<boolean>;
+  diagnostic: DiagnosticInfo;
+  clearTokenAndRepair: () => void;
 }
 
 const PAIRING_CLOSE_CODES = new Set([4001, 4401]);
@@ -55,6 +58,24 @@ export function useMediaHost(): UseMediaHostResult {
   });
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [pairedDevices, setPairedDevices] = useState<PairedDevicePublic[]>([]);
+
+  const [diagnostic, setDiagnostic] = useState<DiagnosticInfo>(() => {
+    const token = loadAuthToken();
+    return {
+      wsUrl: buildWebSocketUrl(),
+      clientOrigin: typeof window !== "undefined" ? window.location.origin : "",
+      clientHost: typeof window !== "undefined" ? window.location.host : "",
+      isLoopback: isLoopbackHost(),
+      hasToken: Boolean(token),
+      tokenPrefix: token ? `${token.slice(0, 8)}...` : "",
+      connectionStatus: !isLoopbackHost() && !token && !getPairingCodeFromUrl() ? "pairing_required" : "connecting",
+      lastCloseCode: null,
+      lastCloseReason: null,
+      lastCloseTimestamp: null,
+      lastError: null,
+      reconnectAttempts: 0,
+    };
+  });
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
@@ -109,6 +130,23 @@ export function useMediaHost(): UseMediaHostResult {
     [refreshPairedDevices],
   );
 
+  const clearTokenAndRepair = useCallback(() => {
+    clearAuthToken();
+    pairingRequiredRef.current = true;
+    pairingInProgressRef.current = false;
+    setConnectionStatus("pairing_required");
+    setDiagnostic((prev) => ({
+      ...prev,
+      hasToken: false,
+      tokenPrefix: "",
+      connectionStatus: "pairing_required",
+    }));
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+  }, []);
+
   const connect = useCallback(() => {
     if (disposedRef.current || pairingInProgressRef.current) return;
     clearReconnectTimer();
@@ -117,6 +155,12 @@ export function useMediaHost(): UseMediaHostResult {
     if (!isLoopbackHost() && !loadAuthToken()) {
       pairingRequiredRef.current = true;
       setConnectionStatus("pairing_required");
+      setDiagnostic((prev) => ({
+        ...prev,
+        connectionStatus: "pairing_required",
+        hasToken: false,
+        tokenPrefix: "",
+      }));
       return;
     }
 
@@ -126,13 +170,23 @@ export function useMediaHost(): UseMediaHostResult {
     }
 
     setConnectionStatus((prev) => (prev === "reconnecting" ? "reconnecting" : "connecting"));
+    setDiagnostic((prev) => ({
+      ...prev,
+      connectionStatus: prev.connectionStatus === "reconnecting" ? "reconnecting" : "connecting",
+    }));
 
     let socket: WebSocket;
+    const wsUrl = buildWebSocketUrl();
     try {
-      socket = new WebSocket(buildWebSocketUrl());
+      socket = new WebSocket(wsUrl);
     } catch {
       const delay = computeReconnectDelayMs(attemptRef.current++);
       setConnectionStatus("reconnecting");
+      setDiagnostic((prev) => ({
+        ...prev,
+        connectionStatus: "reconnecting",
+        reconnectAttempts: attemptRef.current,
+      }));
       reconnectTimerRef.current = window.setTimeout(connect, delay);
       return;
     }
@@ -148,8 +202,16 @@ export function useMediaHost(): UseMediaHostResult {
       pairingRequiredRef.current = false;
       setConnectionStatus("connected");
 
-      // Send auth frame immediately if a token exists
       const token = loadAuthToken();
+      setDiagnostic((prev) => ({
+        ...prev,
+        connectionStatus: "connected",
+        hasToken: Boolean(token),
+        tokenPrefix: token ? `${token.slice(0, 8)}...` : "",
+        reconnectAttempts: 0,
+      }));
+
+      // Send auth frame immediately if a token exists
       if (token) {
         try {
           socket.send(JSON.stringify({ v: 1, type: "auth", token }));
@@ -172,10 +234,20 @@ export function useMediaHost(): UseMediaHostResult {
         }
         if (parsed.type === "error") {
           const errMsg = parsed as ErrorMessage;
+          setDiagnostic((prev) => ({
+            ...prev,
+            lastError: errMsg.message || errMsg.code,
+          }));
           if (errMsg.code === "pairing_required") {
             clearAuthToken();
             pairingRequiredRef.current = true;
             setConnectionStatus("pairing_required");
+            setDiagnostic((prev) => ({
+              ...prev,
+              hasToken: false,
+              tokenPrefix: "",
+              connectionStatus: "pairing_required",
+            }));
           }
           showError(errMsg.message || "Não foi possível concluir o comando.");
         }
@@ -190,6 +262,14 @@ export function useMediaHost(): UseMediaHostResult {
       }
       if (disposedRef.current) return;
 
+      setDiagnostic((prev) => ({
+        ...prev,
+        lastCloseCode: event.code,
+        lastCloseReason: event.reason || null,
+        lastCloseTimestamp: new Date().toLocaleTimeString(),
+        reconnectAttempts: attemptRef.current + 1,
+      }));
+
       if (
         PAIRING_CLOSE_CODES.has(event.code) ||
         pairingRequiredRef.current ||
@@ -198,16 +278,28 @@ export function useMediaHost(): UseMediaHostResult {
         clearAuthToken();
         pairingRequiredRef.current = true;
         setConnectionStatus("pairing_required");
+        setDiagnostic((prev) => ({
+          ...prev,
+          hasToken: false,
+          tokenPrefix: "",
+          connectionStatus: "pairing_required",
+        }));
         return;
       }
 
       setConnectionStatus("reconnecting");
       const delay = computeReconnectDelayMs(attemptRef.current++);
+      setDiagnostic((prev) => ({
+        ...prev,
+        connectionStatus: "reconnecting",
+        reconnectAttempts: attemptRef.current,
+      }));
       reconnectTimerRef.current = window.setTimeout(connect, delay);
     };
   }, [clearReconnectTimer, showError]);
 
   const reconnectNow = useCallback(() => {
+    pairingInProgressRef.current = false;
     attemptRef.current = 0;
     clearReconnectTimer();
     const existing = wsRef.current;
@@ -218,10 +310,20 @@ export function useMediaHost(): UseMediaHostResult {
     if (!isLoopbackHost() && !loadAuthToken()) {
       pairingRequiredRef.current = true;
       setConnectionStatus("pairing_required");
+      setDiagnostic((prev) => ({
+        ...prev,
+        hasToken: false,
+        tokenPrefix: "",
+        connectionStatus: "pairing_required",
+      }));
       return;
     }
     pairingRequiredRef.current = false;
     setConnectionStatus("connecting");
+    setDiagnostic((prev) => ({
+      ...prev,
+      connectionStatus: "connecting",
+    }));
     connect();
   }, [clearReconnectTimer, connect]);
 
@@ -234,6 +336,8 @@ export function useMediaHost(): UseMediaHostResult {
           showError(res.error || "Falha ao parear com o PIN informado.");
           return { ok: false, error: res.error };
         }
+        // Desbloquear flag de pareamento ANTES de disparar reconexão
+        pairingInProgressRef.current = false;
         pairingRequiredRef.current = false;
         setConnectionStatus("connecting");
         reconnectNow();
@@ -255,6 +359,7 @@ export function useMediaHost(): UseMediaHostResult {
       clearPairingCodeFromUrl();
       pairDeviceApi(initialPairCode)
         .then((res) => {
+          pairingInProgressRef.current = false;
           if (res.ok) {
             pairingRequiredRef.current = false;
             connect();
@@ -400,5 +505,7 @@ export function useMediaHost(): UseMediaHostResult {
     pairedDevices,
     refreshPairedDevices,
     revokeDevice,
+    diagnostic,
+    clearTokenAndRepair,
   };
 }

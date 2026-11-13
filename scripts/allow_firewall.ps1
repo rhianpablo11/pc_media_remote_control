@@ -1,4 +1,4 @@
-#Requires -RunAsAdministrator
+﻿#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
     Configura a regra de entrada no Firewall do Windows para o PC Media Control.
@@ -20,7 +20,7 @@ param(
 )
 
 Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host "   PC Media Control — Configuração do Firewall do Windows  " -ForegroundColor Cyan
+Write-Host "   PC Media Control - Configuração do Firewall do Windows  " -ForegroundColor Cyan
 Write-Host "==========================================================" -ForegroundColor Cyan
 Write-Host ""
 

@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import type { ConnectionStatus, MediaAction, PairedDevicePublic, ThemeMode } from "../types";
+import type { ConnectionStatus, DiagnosticInfo, MediaAction, PairedDevicePublic, ThemeMode } from "../types";
 import { NextIcon, PauseIcon, PlayIcon, PreviousIcon } from "./Icons";
 
 interface MoreViewProps {
@@ -13,6 +13,8 @@ interface MoreViewProps {
   pairedDevices?: PairedDevicePublic[];
   onRefreshDevices?: () => void;
   onRevokeDevice?: (deviceId: string) => void;
+  diagnostic?: DiagnosticInfo;
+  onClearTokenAndRepair?: () => void;
 }
 
 const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
@@ -32,6 +34,8 @@ export function MoreView({
   pairedDevices = [],
   onRefreshDevices,
   onRevokeDevice,
+  diagnostic,
+  onClearTokenAndRepair,
 }: MoreViewProps) {
   const [ytQuery, setYtQuery] = useState("");
   const [openUrl, setOpenUrl] = useState("");
@@ -219,6 +223,101 @@ export function MoreView({
         >
           Reconectar
         </button>
+      </section>
+
+      {/* 3.1 Diagnóstico de Conexão (depuração no mobile sem cabo) */}
+      <section className="card-surface p-5 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
+        <div className="mb-2 flex items-center justify-between">
+          <h2 className="text-base font-semibold" style={{ color: "var(--text)" }}>
+            Diagnóstico de Conexão
+          </h2>
+          <span
+            className="rounded-full px-2.5 py-0.5 text-[11px] font-semibold"
+            style={{
+              backgroundColor: "var(--surface-elevated)",
+              color: connectionStatus === "connected" ? "var(--ok)" : "var(--warn)",
+            }}
+          >
+            {connectionStatus}
+          </span>
+        </div>
+        <p className="mb-3 text-xs" style={{ color: "var(--text-secondary)" }}>
+          Informações em tempo real para depuração na rede local.
+        </p>
+
+        <div
+          className="flex flex-col gap-2 rounded-2xl p-3 text-xs font-mono"
+          style={{ backgroundColor: "var(--surface-elevated)", color: "var(--text)" }}
+        >
+          <div className="flex flex-col">
+            <span
+              className="text-[10px] font-bold uppercase tracking-wider"
+              style={{ color: "var(--text-secondary)" }}
+            >
+              URL WebSocket
+            </span>
+            <span className="break-all">{diagnostic?.wsUrl || "—"}</span>
+          </div>
+          <div className="flex justify-between border-t border-[var(--separator)] pt-2">
+            <span style={{ color: "var(--text-secondary)" }}>Host / Origem:</span>
+            <span className="truncate max-w-[200px] text-right">{diagnostic?.clientHost || (typeof window !== "undefined" ? window.location.host : "—")}</span>
+          </div>
+          <div className="flex justify-between border-t border-[var(--separator)] pt-2">
+            <span style={{ color: "var(--text-secondary)" }}>Ambiente:</span>
+            <span>{diagnostic?.isLoopback ? "Loopback (Localhost)" : "Rede Local (LAN)"}</span>
+          </div>
+          <div className="flex justify-between border-t border-[var(--separator)] pt-2">
+            <span style={{ color: "var(--text-secondary)" }}>Token Autenticação:</span>
+            <span>{diagnostic?.hasToken ? `Salvo (${diagnostic.tokenPrefix})` : "Ausente"}</span>
+          </div>
+          <div className="flex justify-between border-t border-[var(--separator)] pt-2">
+            <span style={{ color: "var(--text-secondary)" }}>Último Fechamento:</span>
+            <span>
+              {diagnostic?.lastCloseCode !== null && diagnostic?.lastCloseCode !== undefined
+                ? `${diagnostic.lastCloseCode} (${diagnostic.lastCloseReason || "sem motivo"})`
+                : "Nenhum"}
+            </span>
+          </div>
+          {diagnostic?.lastCloseTimestamp ? (
+            <div className="flex justify-between border-t border-[var(--separator)] pt-2">
+              <span style={{ color: "var(--text-secondary)" }}>Horário Fechamento:</span>
+              <span>{diagnostic.lastCloseTimestamp}</span>
+            </div>
+          ) : null}
+          {diagnostic?.lastError ? (
+            <div className="flex flex-col border-t border-[var(--separator)] pt-2 text-[var(--danger)]">
+              <span className="text-[10px] font-bold uppercase tracking-wider">Último Erro do Host:</span>
+              <span className="break-words font-sans text-xs">{diagnostic.lastError}</span>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="mt-3 flex gap-2">
+          <button
+            type="button"
+            onClick={onReconnect}
+            className="touch-btn flex-1 rounded-xl py-2 text-xs font-semibold"
+            style={{
+              backgroundColor: "var(--surface-elevated)",
+              color: "var(--accent)",
+            }}
+          >
+            Reconectar Socket
+          </button>
+          {onClearTokenAndRepair ? (
+            <button
+              type="button"
+              onClick={onClearTokenAndRepair}
+              className="touch-btn flex-1 rounded-xl py-2 text-xs font-semibold"
+              style={{
+                backgroundColor: "var(--surface-elevated)",
+                color: "var(--danger)",
+              }}
+            >
+              Limpar Pareamento
+            </button>
+          ) : null}
+        </div>
       </section>
 
       {/* 4. Dispositivos Pareados */}

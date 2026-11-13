@@ -95,3 +95,18 @@ export interface PairedDevicePublic {
   createdAt: string;
   lastSeenAt: string;
 }
+
+export interface DiagnosticInfo {
+  wsUrl: string;
+  clientOrigin: string;
+  clientHost: string;
+  isLoopback: boolean;
+  hasToken: boolean;
+  tokenPrefix: string;
+  connectionStatus: ConnectionStatus;
+  lastCloseCode: number | null;
+  lastCloseReason: string | null;
+  lastCloseTimestamp: string | null;
+  lastError: string | null;
+  reconnectAttempts: number;
+}

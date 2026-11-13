@@ -149,7 +149,7 @@ def resolve_primary_lan_ip(
 
 
 class MdnsPublisher:
-    """Publishes _pcmedia._tcp.local. service via zeroconf."""
+    """Publishes _pcmedia._tcp.local. service via AsyncZeroconf."""
 
     def __init__(self, lan_ip: str, port: int, hostname: str | None = None) -> None:
         self.lan_ip = lan_ip
@@ -162,10 +162,11 @@ class MdnsPublisher:
         self._zeroconf: Any = None
         self._service_info: Any = None
 
-    def start(self) -> bool:
-        """Register mDNS service with zeroconf."""
+    async def async_start(self) -> bool:
+        """Register mDNS service asynchronously using AsyncZeroconf."""
         try:
-            from zeroconf import IPVersion, ServiceInfo, Zeroconf
+            from zeroconf import IPVersion, ServiceInfo
+            from zeroconf.asyncio import AsyncZeroconf
 
             packed_ip = socket.inet_aton(self.lan_ip)
             self._service_info = ServiceInfo(
@@ -180,22 +181,50 @@ class MdnsPublisher:
                 },
                 server=self.server_name,
             )
-            self._zeroconf = Zeroconf(ip_version=IPVersion.V4Only)
-            self._zeroconf.register_service(self._service_info)
-            logger.info("mDNS publicado: %s -> %s:%d", self.service_name, self.lan_ip, self.port)
+            self._zeroconf = AsyncZeroconf(ip_version=IPVersion.V4Only)
+            await self._zeroconf.async_register_service(self._service_info)
+            logger.info(
+                "mDNS publicado assincronamente: %s -> %s:%d",
+                self.service_name,
+                self.lan_ip,
+                self.port,
+            )
             return True
         except Exception:  # noqa: BLE001
-            logger.exception("Falha ao publicar mDNS")
+            logger.exception("Falha ao publicar mDNS via AsyncZeroconf")
             return False
 
-    def stop(self) -> None:
-        """Unregister mDNS service cleanly."""
+    async def async_stop(self) -> None:
+        """Unregister mDNS service asynchronously."""
         if self._zeroconf is not None and self._service_info is not None:
             try:
-                self._zeroconf.unregister_service(self._service_info)
-                self._zeroconf.close()
+                await self._zeroconf.async_unregister_service(self._service_info)
+                await self._zeroconf.async_close()
             except Exception:  # noqa: BLE001
                 pass
             finally:
                 self._zeroconf = None
                 self._service_info = None
+
+    def start(self) -> bool:
+        """Synchronous wrapper for async_start (for non-async callers)."""
+        import asyncio
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(self.async_start())
+        else:
+            loop.create_task(self.async_start())
+            return True
+
+    def stop(self) -> None:
+        """Synchronous wrapper for async_stop (for non-async callers)."""
+        import asyncio
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(self.async_stop())
+        else:
+            loop.create_task(self.async_stop())

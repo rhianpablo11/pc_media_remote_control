@@ -118,9 +118,7 @@ class CommandMessage(BaseModel):
             self.value is None or not math.isfinite(self.value) or self.value < 0
         ):
             raise ValueError("O comando 'seek' exige 'value' >= 0 em segundos.")
-        if self.action == "seek_relative" and (
-            self.value is None or not math.isfinite(self.value)
-        ):
+        if self.action == "seek_relative" and (self.value is None or not math.isfinite(self.value)):
             raise ValueError("O comando 'seek_relative' exige 'value' finito em segundos.")
         return self
 

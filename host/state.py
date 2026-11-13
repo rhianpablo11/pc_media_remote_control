@@ -197,9 +197,7 @@ class HostStateCoordinator:
     ) -> PongMessage | ErrorMessage | None:
         """Validate and process one incoming JSON message from a control client."""
         req_id = (
-            str(raw.get("requestId"))
-            if isinstance(raw, dict) and raw.get("requestId")
-            else None
+            str(raw.get("requestId")) if isinstance(raw, dict) and raw.get("requestId") else None
         )
         try:
             msg = parse_client_message(raw)

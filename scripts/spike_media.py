@@ -256,9 +256,7 @@ def resolve_session_index(
     except ValueError:
         needle = selector.lower()
         matches = [
-            s.index
-            for s in snapshots
-            if needle in s.app_id.lower() or needle in s.title.lower()
+            s.index for s in snapshots if needle in s.app_id.lower() or needle in s.title.lower()
         ]
         if not matches:
             raise ValueError(f"Nenhuma sessão corresponde a {selector!r}.") from None
@@ -326,8 +324,7 @@ def print_snapshots(snapshots: list[SessionSnapshot], as_json: bool = False) -> 
         dur_str = format_seconds(snap.duration_sec)
 
         print(
-            f"[{snap.index}] {snap.app_id}{marker}  |  "
-            f"status={snap.status} ({snap.playback_type})"
+            f"[{snap.index}] {snap.app_id}{marker}  |  status={snap.status} ({snap.playback_type})"
         )
         print(f"    Título : {snap.title or '(vazio)'}")
         album_part = f"  |  Álbum: {snap.album}" if snap.album else ""

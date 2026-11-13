@@ -53,6 +53,8 @@ export function App() {
     pairedDevices,
     refreshPairedDevices,
     revokeDevice,
+    diagnostic,
+    clearTokenAndRepair,
   } = useMediaHost();
 
   const [activeTab, setActiveTab] = useState<ActiveTab>("now_playing");
@@ -165,6 +167,8 @@ export function App() {
             pairedDevices={pairedDevices}
             onRefreshDevices={refreshPairedDevices}
             onRevokeDevice={revokeDevice}
+            diagnostic={diagnostic}
+            onClearTokenAndRepair={clearTokenAndRepair}
           />
         )}
       </main>

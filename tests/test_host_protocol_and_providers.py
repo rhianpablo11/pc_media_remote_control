@@ -240,7 +240,12 @@ def test_protocol_v1_validation() -> None:
     assert open_search.query == "lo-fi study"
 
     open_url = parse_client_message(
-        {"v": 1, "type": "open", "mode": "url", "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}
+        {
+            "v": 1,
+            "type": "open",
+            "mode": "url",
+            "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        }
     )
     assert isinstance(open_url, OpenMessage)
 
@@ -571,8 +576,9 @@ def test_websocket_origin_validation_rejects_invalid_and_missing_origins() -> No
             {"origin": f"chrome-extension://{DEFAULT_EXTENSION_ID}"},
             {"origin": "null"},
         ):
-            with pytest.raises((WebSocketDisconnect, Exception)), client.websocket_connect(
-                "/ws", headers=invalid_headers
+            with (
+                pytest.raises((WebSocketDisconnect, Exception)),
+                client.websocket_connect("/ws", headers=invalid_headers),
             ):
                 pass
 
@@ -587,8 +593,9 @@ def test_websocket_origin_validation_rejects_invalid_and_missing_origins() -> No
             {"origin": "http://evil.com"},
             {"origin": "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
         ):
-            with pytest.raises((WebSocketDisconnect, Exception)), client.websocket_connect(
-                "/ws/extension", headers=bad_ext_headers
+            with (
+                pytest.raises((WebSocketDisconnect, Exception)),
+                client.websocket_connect("/ws/extension", headers=bad_ext_headers),
             ):
                 pass
 
@@ -608,8 +615,9 @@ def test_dev_mode_gates_vite_websocket_origin() -> None:
     )
     with TestClient(prod_app) as client:
         for dev_origin in ("http://localhost:5173", "http://127.0.0.1:5173"):
-            with pytest.raises((WebSocketDisconnect, Exception)), client.websocket_connect(
-                "/ws", headers={"origin": dev_origin}
+            with (
+                pytest.raises((WebSocketDisconnect, Exception)),
+                client.websocket_connect("/ws", headers={"origin": dev_origin}),
             ):
                 pass
 
@@ -626,9 +634,10 @@ def test_dev_mode_gates_vite_websocket_origin() -> None:
         audio_provider=win,
         chrome_provider=ext,
     )
-    with TestClient(dev_app) as client, client.websocket_connect(
-        "/ws", headers={"origin": "http://localhost:5173"}
-    ) as ws:
+    with (
+        TestClient(dev_app) as client,
+        client.websocket_connect("/ws", headers={"origin": "http://localhost:5173"}) as ws,
+    ):
         assert ws.receive_json()["type"] == "state"
 
 

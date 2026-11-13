@@ -81,9 +81,7 @@ def create_app(
         audio_provider if audio_provider is not None else owned_windows  # type: ignore[assignment]
     )
     active_providers: list[SessionProvider] = (
-        list(providers)
-        if providers is not None
-        else [ext_provider, owned_windows]  # type: ignore[list-item]
+        list(providers) if providers is not None else [ext_provider, owned_windows]  # type: ignore[list-item]
     )
 
     coordinator = HostStateCoordinator(
@@ -129,7 +127,7 @@ def create_app(
         server_loop = asyncio.get_running_loop()
 
         if mdns_publisher is not None:
-            mdns_publisher.start()
+            await mdns_publisher.async_start()
 
         async def _poll_loop() -> None:
             while True:
@@ -145,7 +143,7 @@ def create_app(
             with contextlib.suppress(asyncio.CancelledError):
                 await poll_task
             if mdns_publisher is not None:
-                mdns_publisher.stop()
+                await mdns_publisher.async_stop()
             if owned_windows is not None:
                 owned_windows.close()
 
@@ -239,13 +237,13 @@ def create_app(
             f"""
             <tr>
               <td style="padding: 8px 12px; border-bottom: 1px solid #e5e5ea;">
-                <strong>{d['name']}</strong>
+                <strong>{d["name"]}</strong>
               </td>
               <td style="padding: 8px 12px; border-bottom: 1px solid #e5e5ea; color: #666;">
-                {d['createdAt'][:19].replace('T', ' ')}
+                {d["createdAt"][:19].replace("T", " ")}
               </td>
               <td style="padding: 8px 12px; border-bottom: 1px solid #e5e5ea; text-align: right;">
-                <form method="POST" action="/pair/revoke/{d['id']}" style="margin: 0;">
+                <form method="POST" action="/pair/revoke/{d["id"]}" style="margin: 0;">
                   <button type="submit" class="revoke-btn">Revogar</button>
                 </form>
               </td>
@@ -254,7 +252,7 @@ def create_app(
             for d in paired_devices
         ) or (
             '<tr><td colspan="3" style="padding: 16px; text-align: center; color: #888;">'
-            'Nenhum dispositivo pareado ainda.</td></tr>'
+            "Nenhum dispositivo pareado ainda.</td></tr>"
         )
 
         html_content = f"""<!doctype html>
@@ -444,14 +442,38 @@ def create_app(
 
         # In localhost-only mode, block non-loopback completely
         if not cfg.lan_mode and not is_loopback:
+            logger.warning(
+                "WebSocket /ws rejeitado de %s: modo LAN desativado (--lan necessário)",
+                client_host,
+            )
             await websocket.close(code=1008, reason="Acesso permitido apenas via localhost")
             return
 
+        # Validate Host header against allowed hosts (DNS rebinding mitigation)
+        raw_host = websocket.headers.get("host")
+        if raw_host:
+            clean_host = raw_host.strip().lower()
+            allowed_hosts = cfg.get_allowed_hosts()
+            if clean_host not in allowed_hosts:
+                logger.warning(
+                    "WebSocket /ws rejeitado de %s: cabeçalho Host inválido %r (permitidos: %s)",
+                    client_host,
+                    raw_host,
+                    allowed_hosts,
+                )
+                await websocket.close(code=1008, reason="Host inválido (DNS rebinding mitigado)")
+                return
+
         # Validate Origin header
-        origin = normalize_origin(websocket.headers.get("origin"))
+        raw_origin = websocket.headers.get("origin")
+        origin = normalize_origin(raw_origin)
         allowed_origins = cfg.get_allowed_ws_origins()
         if not origin or origin not in allowed_origins:
-            logger.warning("WebSocket /ws rejeitado por Origin inválido: %r", origin)
+            logger.warning(
+                "WebSocket /ws rejeitado de %s: Origin inválida ou ausente %r",
+                client_host,
+                raw_origin,
+            )
             await websocket.close(code=1008, reason="Origin não autorizada")
             return
 
@@ -463,35 +485,11 @@ def create_app(
         if not is_loopback:
             try:
                 raw_auth_text = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
-                raw_auth_json = json.loads(raw_auth_text)
-                if raw_auth_json.get("type") != "auth" or not raw_auth_json.get("token"):
-                    err = ErrorMessage(
-                        code="pairing_required",
-                        message="Dispositivo não autenticado. Autenticação obrigatória na LAN.",
-                    )
-                    await websocket.send_text(err.model_dump_json())
-                    await websocket.close(code=4001, reason="Pairing required")
-                    return
-
-                token = str(raw_auth_json["token"])
-                device = pairing_mgr.validate_token(token)
-                if device is None:
-                    err = ErrorMessage(
-                        code="pairing_required",
-                        message="Token de pareamento inválido ou revogado. Pareie novamente.",
-                    )
-                    await websocket.send_text(err.model_dump_json())
-                    await websocket.close(code=4001, reason="Pairing token invalid or revoked")
-                    return
-
-                authenticated_device_id = device.id
-                device_websockets[device.id].add(websocket)
-                logger.info(
-                    "WebSocket /ws autenticado para dispositivo %s (%s)",
-                    device.name,
-                    device.id,
+            except TimeoutError:
+                logger.warning(
+                    "WebSocket /ws rejeitado de %s: timeout de 5.0s aguardando auth na LAN",
+                    client_host,
                 )
-            except (TimeoutError, json.JSONDecodeError):
                 with contextlib.suppress(Exception):
                     err = ErrorMessage(
                         code="pairing_required",
@@ -500,11 +498,76 @@ def create_app(
                     await websocket.send_text(err.model_dump_json())
                     await websocket.close(
                         code=4001,
-                        reason="Authentication timeout or invalid payload",
+                        reason="Authentication timeout",
                     )
                 return
             except WebSocketDisconnect:
+                logger.info(
+                    "WebSocket /ws desconectado pelo cliente %s durante handshake", client_host
+                )
                 return
+
+            try:
+                raw_auth_json = json.loads(raw_auth_text)
+            except json.JSONDecodeError:
+                logger.warning(
+                    "WebSocket /ws rejeitado de %s: frame de auth não é JSON válido: %r",
+                    client_host,
+                    raw_auth_text[:120],
+                )
+                with contextlib.suppress(Exception):
+                    err = ErrorMessage(
+                        code="invalid_json",
+                        message="Payload de autenticação não é JSON válido.",
+                    )
+                    await websocket.send_text(err.model_dump_json())
+                    await websocket.close(
+                        code=4001,
+                        reason="Invalid JSON auth frame",
+                    )
+                return
+
+            if (
+                not isinstance(raw_auth_json, dict)
+                or raw_auth_json.get("type") != "auth"
+                or not raw_auth_json.get("token")
+            ):
+                logger.warning(
+                    "WebSocket /ws rejeitado de %s: frame de auth inválido ou sem token: %r",
+                    client_host,
+                    raw_auth_text[:120],
+                )
+                err = ErrorMessage(
+                    code="pairing_required",
+                    message="Dispositivo não autenticado. Autenticação obrigatória na LAN.",
+                )
+                await websocket.send_text(err.model_dump_json())
+                await websocket.close(code=4001, reason="Pairing required")
+                return
+
+            token = str(raw_auth_json["token"])
+            device = pairing_mgr.validate_token(token)
+            if device is None:
+                logger.warning(
+                    "WebSocket /ws rejeitado de %s: token inválido, revogado ou inexistente",
+                    client_host,
+                )
+                err = ErrorMessage(
+                    code="pairing_required",
+                    message="Token de pareamento inválido ou revogado. Pareie novamente.",
+                )
+                await websocket.send_text(err.model_dump_json())
+                await websocket.close(code=4001, reason="Pairing token invalid or revoked")
+                return
+
+            authenticated_device_id = device.id
+            device_websockets[device.id].add(websocket)
+            logger.info(
+                "WebSocket /ws autenticado com sucesso para dispositivo '%s' (ID: %s, IP: %s)",
+                device.name,
+                device.id,
+                client_host,
+            )
 
         coordinator.register_client(websocket)
         try:
@@ -547,6 +610,10 @@ def create_app(
     async def extension_websocket(websocket: WebSocket) -> None:
         client_host = websocket.client.host if websocket.client is not None else ""
         if not is_loopback_client(client_host):
+            logger.warning(
+                "WebSocket /ws/extension rejeitado de %s: aceita apenas conexões locais",
+                client_host,
+            )
             await websocket.close(code=1008, reason="Acesso permitido apenas via localhost")
             return
 
