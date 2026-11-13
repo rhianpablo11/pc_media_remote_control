@@ -491,12 +491,19 @@ def create_app(
                     device.name,
                     device.id,
                 )
-            except (TimeoutError, json.JSONDecodeError, WebSocketDisconnect):
+            except (TimeoutError, json.JSONDecodeError):
                 with contextlib.suppress(Exception):
+                    err = ErrorMessage(
+                        code="pairing_required",
+                        message="Tempo limite de autenticação expirado. Pareie o dispositivo.",
+                    )
+                    await websocket.send_text(err.model_dump_json())
                     await websocket.close(
                         code=4001,
                         reason="Authentication timeout or invalid payload",
                     )
+                return
+            except WebSocketDisconnect:
                 return
 
         coordinator.register_client(websocket)

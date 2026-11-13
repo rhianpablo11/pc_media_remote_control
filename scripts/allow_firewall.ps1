@@ -1,4 +1,4 @@
-﻿#Requires -RunAsAdministrator
+#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
     Configura a regra de entrada no Firewall do Windows para o PC Media Control.
@@ -93,6 +93,6 @@ Write-Host "    sua rede Wi-Fi pode ter 'Isolamento de Clientes' (AP Isolation, 
 Write-Host "  - Plano B (Hotspot): ative o 'Hotspot móvel' do Windows (ou roteador Wi-Fi do celular)" -ForegroundColor Gray
 Write-Host "    e conecte ambos os aparelhos na mesma rede do hotspot." -ForegroundColor Gray
 Write-Host ""
-Write-Host "Configuração concluída com sucesso! Agora você pode rodar:" -ForegroundColor Green
-Write-Host "  .\.venv\Scripts\python.exe -m host --lan" -ForegroundColor Cyan
+Write-Host 'Configuração concluída com sucesso! Agora você pode rodar:' -ForegroundColor Green
+Write-Host '  .\.venv\Scripts\python.exe -m host --lan' -ForegroundColor Cyan
 Write-Host ""

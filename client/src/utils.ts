@@ -110,6 +110,12 @@ export function buildWebSocketUrl(): string {
   return `${proto}//${window.location.host}/ws`;
 }
 
+export function isLoopbackHost(): boolean {
+  if (typeof window === "undefined") return true;
+  const host = window.location.hostname;
+  return host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host === "::1";
+}
+
 export function computeReconnectDelayMs(attempt: number): number {
   const safe = Math.max(0, attempt);
   return Math.min(12_000, 1000 * Math.pow(2, safe));

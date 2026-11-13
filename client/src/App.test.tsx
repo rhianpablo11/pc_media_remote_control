@@ -223,6 +223,8 @@ describe("utils", () => {
 });
 
 describe("App PWA", () => {
+  const originalLocation = window.location;
+
   beforeEach(() => {
     MockWebSocket.instances = [];
     vi.stubGlobal("WebSocket", MockWebSocket as unknown as typeof WebSocket);
@@ -233,6 +235,8 @@ describe("App PWA", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    delete (window as unknown as { location?: unknown }).location;
+    (window as unknown as { location: unknown }).location = originalLocation;
   });
 
   it("loads cached state first, transitions to live state, normalizes title, and sends commands", () => {
@@ -478,5 +482,17 @@ describe("App PWA", () => {
       }),
     );
     expect(localStorage.getItem("pcmedia_auth_token_v1")).toBe("tok-new-123");
+  });
+
+  it("shows pairing screen immediately on LAN when no token is stored", () => {
+    delete (window as unknown as { location?: unknown }).location;
+    (window as unknown as { location: unknown }).location = new URL("http://192.168.15.4:8765/");
+
+    render(<App />);
+
+    // Should immediately show PairingPlaceholder on LAN without token
+    expect(screen.getByText("Dispositivo não pareado")).toBeInTheDocument();
+    // No WebSocket should be opened
+    expect(MockWebSocket.instances.length).toBe(0);
   });
 });

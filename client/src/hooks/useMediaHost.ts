@@ -13,6 +13,7 @@ import {
   computeReconnectDelayMs,
   fetchPairedDevicesApi,
   getPairingCodeFromUrl,
+  isLoopbackHost,
   loadAuthToken,
   loadCachedState,
   pairDeviceApi,
@@ -46,7 +47,12 @@ export function useMediaHost(): UseMediaHostResult {
   const [state, setState] = useState<StateMessage | null>(initialCache);
   const [isCachedState, setIsCachedState] = useState<boolean>(initialCache !== null);
   const [receivedAtMs, setReceivedAtMs] = useState<number>(() => Date.now());
-  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("connecting");
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(() => {
+    if (!isLoopbackHost() && !loadAuthToken() && !getPairingCodeFromUrl()) {
+      return "pairing_required";
+    }
+    return "connecting";
+  });
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [pairedDevices, setPairedDevices] = useState<PairedDevicePublic[]>([]);
 
@@ -57,6 +63,7 @@ export function useMediaHost(): UseMediaHostResult {
   const disposedRef = useRef<boolean>(false);
   const reqSeqRef = useRef<number>(0);
   const pairingInProgressRef = useRef<boolean>(false);
+  const pairingRequiredRef = useRef<boolean>(!isLoopbackHost() && !loadAuthToken() && !getPairingCodeFromUrl());
 
   const showError = useCallback((msg: string) => {
     setErrorMessage(msg);
@@ -106,6 +113,13 @@ export function useMediaHost(): UseMediaHostResult {
     if (disposedRef.current || pairingInProgressRef.current) return;
     clearReconnectTimer();
 
+    // If on LAN without an auth token, do not open WebSocket — show pairing screen immediately
+    if (!isLoopbackHost() && !loadAuthToken()) {
+      pairingRequiredRef.current = true;
+      setConnectionStatus("pairing_required");
+      return;
+    }
+
     const existing = wsRef.current;
     if (existing && (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)) {
       return;
@@ -131,6 +145,7 @@ export function useMediaHost(): UseMediaHostResult {
         return;
       }
       attemptRef.current = 0;
+      pairingRequiredRef.current = false;
       setConnectionStatus("connected");
 
       // Send auth frame immediately if a token exists
@@ -159,6 +174,7 @@ export function useMediaHost(): UseMediaHostResult {
           const errMsg = parsed as ErrorMessage;
           if (errMsg.code === "pairing_required") {
             clearAuthToken();
+            pairingRequiredRef.current = true;
             setConnectionStatus("pairing_required");
           }
           showError(errMsg.message || "Não foi possível concluir o comando.");
@@ -174,8 +190,13 @@ export function useMediaHost(): UseMediaHostResult {
       }
       if (disposedRef.current) return;
 
-      if (PAIRING_CLOSE_CODES.has(event.code)) {
+      if (
+        PAIRING_CLOSE_CODES.has(event.code) ||
+        pairingRequiredRef.current ||
+        (!isLoopbackHost() && !loadAuthToken())
+      ) {
         clearAuthToken();
+        pairingRequiredRef.current = true;
         setConnectionStatus("pairing_required");
         return;
       }
@@ -194,6 +215,12 @@ export function useMediaHost(): UseMediaHostResult {
       existing.close();
       wsRef.current = null;
     }
+    if (!isLoopbackHost() && !loadAuthToken()) {
+      pairingRequiredRef.current = true;
+      setConnectionStatus("pairing_required");
+      return;
+    }
+    pairingRequiredRef.current = false;
     setConnectionStatus("connecting");
     connect();
   }, [clearReconnectTimer, connect]);
@@ -207,6 +234,7 @@ export function useMediaHost(): UseMediaHostResult {
           showError(res.error || "Falha ao parear com o PIN informado.");
           return { ok: false, error: res.error };
         }
+        pairingRequiredRef.current = false;
         setConnectionStatus("connecting");
         reconnectNow();
         return { ok: true };
@@ -228,9 +256,11 @@ export function useMediaHost(): UseMediaHostResult {
       pairDeviceApi(initialPairCode)
         .then((res) => {
           if (res.ok) {
+            pairingRequiredRef.current = false;
             connect();
           } else {
             showError(res.error || "Código de pareamento inválido ou expirado.");
+            pairingRequiredRef.current = true;
             setConnectionStatus("pairing_required");
           }
         })
@@ -238,7 +268,12 @@ export function useMediaHost(): UseMediaHostResult {
           pairingInProgressRef.current = false;
         });
     } else {
-      connect();
+      if (!isLoopbackHost() && !loadAuthToken()) {
+        pairingRequiredRef.current = true;
+        setConnectionStatus("pairing_required");
+      } else {
+        connect();
+      }
     }
 
     const handleResume = () => {
