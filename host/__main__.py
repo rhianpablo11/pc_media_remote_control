@@ -14,6 +14,15 @@ import webbrowser
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+# In Windows GUI mode (console=False or pythonw.exe), sys.stdout, stderr and stdin are None.
+# Redirect them to os.devnull so print() and isatty() calls in third-party libraries won't crash.
+if getattr(sys, "stdout", None) is None:
+    sys.stdout = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115
+if getattr(sys, "stderr", None) is None:
+    sys.stderr = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115
+if getattr(sys, "stdin", None) is None:
+    sys.stdin = open(os.devnull, encoding="utf-8")  # noqa: SIM115
+
 import uvicorn
 
 from host.app import create_app
@@ -41,8 +50,18 @@ def setup_logging(log_level: str = "INFO", console: bool = True) -> Path:
     )
     handlers: list[logging.Handler] = [file_handler]
 
-    has_stdout = getattr(sys, "stdout", None) is not None
-    if console and has_stdout:
+    has_real_console = False
+    try:
+        has_real_console = (
+            console
+            and getattr(sys, "stdout", None) is not None
+            and getattr(sys.stdout, "name", "") != os.devnull
+            and sys.stdout.isatty()
+        )
+    except Exception:
+        has_real_console = False
+
+    if has_real_console:
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setFormatter(
             logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -330,6 +349,7 @@ def main() -> int:
             host=settings.host,
             port=settings.port,
             log_level="info" if not args.headless else "warning",
+            log_config=None,
         )
     )
 

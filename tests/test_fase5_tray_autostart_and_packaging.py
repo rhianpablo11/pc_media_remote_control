@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
+
+import pytest
 
 from host.autostart import get_startup_command, is_autostart_enabled
 from host.config import (
@@ -130,3 +133,32 @@ def test_pyinstaller_spec_file_exists_and_bundles_all_assets() -> None:
     assert "assets" in content
     assert "pystray" in content
     assert "icon.ico" in content
+
+
+def test_gui_mode_without_console_stdout_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ensure host can configure logging and uvicorn without crashing when sys.stdout is None."""
+    import uvicorn
+
+    from host.__main__ import setup_logging
+    from host.app import create_app
+    from host.config import HostSettings
+
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+
+    # 1. setup_logging must not throw AttributeError
+    log_file = setup_logging(console=True)
+    assert log_file.is_file()
+
+    # 2. uvicorn.Config with log_config=None must initialize without crashing
+    settings = HostSettings(port=8765, host="127.0.0.1", lan_mode=False)
+    app = create_app(settings=settings)
+    cfg = uvicorn.Config(
+        app=app,
+        host=settings.host,
+        port=settings.port,
+        log_config=None,
+    )
+    server = uvicorn.Server(cfg)
+    assert server is not None
+

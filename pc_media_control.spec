@@ -51,8 +51,8 @@ hiddenimports = [
     "host.app",
     "host.config",
     "host.providers.base",
-    "host.providers.windows_provider",
-    "host.providers.chrome_extension_provider",
+    "host.providers.windows",
+    "host.providers.chrome_extension",
 ]
 
 a = Analysis(
