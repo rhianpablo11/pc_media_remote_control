@@ -68,6 +68,17 @@ Nada abaixo deve ser assumido como verdadeiro. Verificar na prática e registrar
 - [x] O firewall do Windows bloqueia a porta na primeira execução? Definir como orientar o usuário (regra para rede privada).
   - **Resultado (confirmado — bloqueia):** A rede Wi-Fi ativa (`LADICA 2`) está como **Perfil Público** (`NetworkCategory = 0`), com política **`BlockInbound,AllowOutbound`** e `InboundUserNotification = Habilitar`. As regras de entrada existentes para `python.exe` cobrem apenas o Python global (`AppData\Local\Programs\Python\Python313\python.exe`), não o `.venv\Scripts\python.exe` nem um futuro executável. Na Fase 4, orientar o usuário a mudar a Wi-Fi para **Rede Privada** ou criar regra de firewall para o executável/porta.
 
+## Hipóteses a validar (Fase 4.2 — Detecção genérica de players web e desduplicação GSMTC segura)
+Problema investigado: em reprodutores web como `suamusica.com.br`, tocar áudio não criava sessão no app (nem no Windows GSMTC nem pela extensão), embora as teclas multimídia globais do teclado funcionassem.
+- [x] **Hipótese (a) — O site cria `new Audio()` fora do DOM (HTMLMediaElement desacoplado)?**
+  - **Resultado (CONFIRMADA com evidência direta no spike):** `suamusica.com.br` utiliza a biblioteca **Howler.js** com um pool interno de áudio HTML5 (`_html5AudioPool`). Os objetos de áudio são instanciados via `new Audio()` na memória JavaScript e **nunca são anexados ao DOM nem a qualquer Shadow DOM**. A busca tradicional `document.querySelectorAll("video, audio")` do content script retornava um array vazio (`[]`), tornando o player invisível para o content script isolado.
+- [x] **Hipótese (b) — O player está em iframe ou usa apenas Web Audio API pura?**
+  - **Resultado (CONFIRMADA/REFUTADA):** O player principal do Sua Música roda no frame superior (Next.js) utilizando instâncias de HTML5 Audio (`new Audio()`) do Howler.js, com fallback para Web Audio apenas quando necessário. No entanto, outros reprodutores genéricos da web utilizam iframes embutidos (SoundCloud, Vimeo, widgets) que não eram cobertos pelo manifest anterior.
+- [x] **Hipótese (c) — O manifest/content script não cobria o site (`matches`, `all_frames`, `run_at`)?**
+  - **Resultado (CONFIRMADA):** O `manifest.json` definia `run_at: "document_idle"` e `all_frames: false`. Com isso, construtores chamados durante o carregamento inicial da página ocorriam antes da injeção do script, e players em subframes eram ignorados.
+- [x] **Hipótese (d) — O host esconde TODAS as sessões GSMTC do `chrome.exe` quando a extensão está conectada?**
+  - **Resultado (CONFIRMADA):** No `host/state.py`, a lógica anterior aplicava `hide_chrome_gsmtc = self.extension_connected` cegamente. Como o Chromium nativo conecta qualquer elemento de áudio HTML5 ativo ao GSMTC do Windows (permitindo que o teclado controle play/pause), o Windows reportava a sessão do Chrome com o título da música. Porém, como a extensão não detectava o elemento desacoplado, o host descartava a sessão GSMTC do `chrome.exe` indiscriminadamente, deixando o usuário sem nenhuma sessão no app.
+
 ## Riscos e cuidados
 - Segurança na LAN: sem pareamento, qualquer dispositivo na rede controlaria o PC. Pareamento é obrigatório a partir da Fase 4 (exposição na LAN); antes disso, o host escuta só em `127.0.0.1`.
 - Não expor o host fora da rede local. Sem port-forward, sem túnel.
@@ -116,3 +127,14 @@ Nada abaixo deve ser assumido como verdadeiro. Verificar na prática e registrar
     3. *Coalescência de broadcasts:* No host, chamadas rápidas e sucessivas de alteração de volume e seek acionam um broadcast com debounce de 35 ms, unificando rajadas de atualizações em pacotes consolidados e reduzindo o tráfego e o custo de re-render no cliente.
     4. *Privacidade no Diagnóstico:* O token de autenticação nunca mais é exibido em formato de prefixo na UI; exibe estritamente `"Salvo"` ou `"Ausente"`.
     5. *Reconexão Rápida (< 1s):* Quedas anômalas (código 1006) disparam reconexão imediata com atraso de apenas 400 ms, e o evento `visibilitychange` verifica e reconecta o socket no momento em que o celular é desbloqueado ou reaberto.
+- **2026-11-13 (Fase 4.2) — Rastreamento de instâncias desacopladas de `HTMLMediaElement` no mundo MAIN:**
+  - `extension/main_world_bridge.js` passa a rodar em `world: "MAIN"`, `run_at: "document_start"` e `all_frames: true`.
+  - O script intercepta `window.Audio`, `Document.prototype.createElement` (tags `audio`/`video`) e `HTMLMediaElement.prototype.play`. Todas as instâncias em memória (mesmo sem vínculo ao DOM, como no Howler.js utilizado pelo `suamusica.com.br`) são registradas num `Set` de elementos monitorados com listeners para eventos de reprodução, tempo e volume.
+  - O estado do elemento ativo desacoplado é serializado e repassado para o content script (`ISOLATED`) via `window.postMessage`. Comandos remotos de reprodução (`play`, `pause`, `toggle`, `seek`, `volume`) enviados pelo app para mídias desacopladas são despachados de volta para o mundo MAIN, executados na instância do elemento e confirmados com ack.
+- **2026-11-13 (Fase 4.2) — Cadeia de fallback para títulos e capas em reprodutores genéricos:**
+  - Implementada a função `stripSiteSuffix` em `extension/content_helpers.js`, removendo prefixos de notificação (`(2509) `, `(1) `) e sufixos de sites populares (`- Sua Música`, `| Sua Música`, `- YouTube`, `| YouTube`, `- Spotify`, `- SoundCloud`, `- Deezer`, `- Bandcamp`, etc.), além de sufixos baseados no domínio da página.
+  - A cadeia de resolução prioriza `navigator.mediaSession.metadata` -> metadados OpenGraph (`meta[property="og:image"]`, `meta[name="twitter:image"]`, `meta[property="og:title"]`) -> `document.title` limpo -> favicon da aba.
+- **2026-11-13 (Fase 4.2) — Desduplicação segura de sessões do Chrome no Host (`host/state.py`):**
+  - O host abandona a ocultação cega de todas as sessões GSMTC do `chrome.exe`.
+  - A ocultação de uma sessão GSMTC do `chrome.exe` ocorre **exclusivamente** quando existe uma sessão reportada pela extensão com título correspondente (comparação normalizada ignorando badges, sufixos e pontuações).
+  - Se o GSMTC listar uma sessão do `chrome.exe` sem correspondência na extensão (por exemplo, reprodutor com limitações, perfil do Chrome sem a extensão instalada ou janela anônima), a sessão é **mantida visível e controlável** no app, recebendo o rótulo descritivo `Chrome (controle básico)` para informar ao usuário que o controle ocorre via GSMTC/sistema operacional.

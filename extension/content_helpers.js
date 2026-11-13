@@ -74,12 +74,29 @@
     return rawTitle.replace(/^\(\d+\+?\)\s*/, "").trim();
   }
 
-  function normalizeMediaMetadata(metadata) {
+  const SITE_SUFFIX_PATTERN =
+    /\s*[-|–—]\s*(?:Sua\s*M[uú]sica(?:(?:\s*-\s*)?O\s*maior\s*site\s*de\s*m[uú]sica\s*do\s*Brasil)?|YouTube(?:\s*Music)?|Spotify(?:\s*Web\s*Player)?|SoundCloud|Deezer|Netflix|Twitch|Bandcamp|Vimeo|Apple\s*Music)\s*$/i;
+
+  function stripSiteSuffix(rawTitle, hostname) {
+    let title = cleanMediaTitle(rawTitle);
+    if (!title) return "";
+    title = title.replace(SITE_SUFFIX_PATTERN, "").trim();
+    if (hostname && typeof hostname === "string") {
+      const cleanHost = hostname.replace(/^www\./i, "").split(".")[0];
+      if (cleanHost && cleanHost.length > 2) {
+        const hostRegex = new RegExp(`\\s*[-|–—]\\s*${cleanHost}(?:\\.[a-z]{2,})?\\s*$`, "i");
+        title = title.replace(hostRegex, "").trim();
+      }
+    }
+    return title;
+  }
+
+  function normalizeMediaMetadata(metadata, hostname = "") {
     if (!metadata || typeof metadata !== "object") {
       return { title: "", artist: "", album: "", artworkUrl: null, hasData: false };
     }
     const rawTitle = typeof metadata.title === "string" ? metadata.title.trim() : "";
-    const title = cleanMediaTitle(rawTitle);
+    const title = stripSiteSuffix(rawTitle, hostname);
     const artist = typeof metadata.artist === "string" ? metadata.artist.trim() : "";
     const album = typeof metadata.album === "string" ? metadata.album.trim() : "";
     const artworkUrl =
@@ -90,10 +107,10 @@
     return { title, artist, album, artworkUrl, hasData };
   }
 
-  function mergeMediaMetadata({ isolatedMeta, mainMeta, domMeta, isYouTube }) {
-    const iso = normalizeMediaMetadata(isolatedMeta);
-    const main = normalizeMediaMetadata(mainMeta);
-    const dom = normalizeMediaMetadata(domMeta);
+  function mergeMediaMetadata({ isolatedMeta, mainMeta, domMeta, isYouTube, hostname = "" }) {
+    const iso = normalizeMediaMetadata(isolatedMeta, hostname);
+    const main = normalizeMediaMetadata(mainMeta, hostname);
+    const dom = normalizeMediaMetadata(domMeta, hostname);
 
     // Prefer fresh YouTube DOM metadata when available to avoid SPA lag,
     // otherwise prefer MAIN world MediaSession -> ISOLATED MediaSession -> DOM.
@@ -201,10 +218,12 @@
 
   const exported = {
     SKIP_AD_SELECTORS,
+    SITE_SUFFIX_PATTERN,
     extractYoutubeVideoId,
     isYoutubeHost,
     youtubeThumbnailUrl,
     cleanMediaTitle,
+    stripSiteSuffix,
     pickBestArtwork,
     normalizeMediaMetadata,
     mergeMediaMetadata,

@@ -331,7 +331,7 @@ def test_coordinator_unifies_and_deduplicates_chrome_when_extension_connected() 
                 "tabs": [
                     {
                         "tabId": "101",
-                        "title": "Video Um",
+                        "title": "YouTube GSMTC Agregado",
                         "channel": "Canal A",
                         "status": "PLAYING",
                         "position": 10.0,
@@ -479,7 +479,7 @@ def test_fastapi_endpoints_and_websockets_with_mocked_providers() -> None:
                         "tabs": [
                             {
                                 "tabId": "77",
-                                "title": "YouTube Tab",
+                                "title": "YouTube GSMTC Agregado",
                                 "channel": "Canal X",
                                 "artworkUrl": "https://i.ytimg.com/vi/abc123456/hqdefault.jpg",
                                 "status": "PLAYING",
@@ -901,3 +901,108 @@ def test_host_state_ack_telemetry_and_reasons() -> None:
     assert vol_reply.ok is True
     assert vol_reply.requestId == "req-vol"
     assert vol_reply.target == "master"
+
+
+def test_coordinator_selective_chrome_gsmtc_deduplication() -> None:
+    async def _test() -> None:
+        class DynamicWindowsProvider(FakeWindowsProvider):
+            def __init__(self, sessions: list[MediaSessionInfo]) -> None:
+                super().__init__()
+                self.sessions = sessions
+
+        gsmtc_sessions = [
+            MediaSessionInfo(
+                id="windows:chrome.exe:0",
+                source="windows",
+                app="Google Chrome",
+                app_id="chrome.exe",
+                title="(1) MC Ryan SP - Tubarão - Sua Música",
+                artist="MC Ryan SP",
+                status="PLAYING",
+            ),
+            MediaSessionInfo(
+                id="windows:chrome.exe:1",
+                source="windows",
+                app="Google Chrome",
+                app_id="chrome.exe",
+                title="Rick Astley - Never Gonna Give You Up - YouTube",
+                artist="Rick Astley",
+                status="PAUSED",
+            ),
+        ]
+        win = DynamicWindowsProvider(gsmtc_sessions)
+        ext = ChromeExtensionProvider()
+        coord = HostStateCoordinator(providers=[ext, win], audio_provider=win)
+
+        # 1. Without extension: both GSMTC sessions visible, labeled "Chrome (controle básico)"
+        s_initial = await coord.build_state()
+        assert len(s_initial.sessions) == 2
+        assert s_initial.sessions[0].app == "Chrome (controle básico)"
+        assert s_initial.sessions[1].app == "Chrome (controle básico)"
+
+        # 2. Connect extension that ONLY has the YouTube tab (not the Sua Música tab)
+        transport = FakeExtensionTransport(ext)
+        ext.attach(transport)
+        await ext.handle_message(
+            {
+                "v": 1,
+                "type": "extension_state",
+                "tabs": [
+                    {
+                        "tabId": "201",
+                        "title": "Never Gonna Give You Up",
+                        "channel": "Rick Astley",
+                        "status": "PAUSED",
+                        "position": 15.0,
+                        "duration": 210.0,
+                        "volume": 0.8,
+                        "muted": False,
+                    }
+                ],
+            }
+        )
+
+        s_with_ext = await coord.build_state()
+        assert s_with_ext.extensionConnected is True
+        session_ids = [s.id for s in s_with_ext.sessions]
+
+        # YouTube session matched -> hidden from GSMTC, present as chrome:201
+        assert "chrome:201" in session_ids
+        assert "windows:chrome.exe:1" not in session_ids
+
+        # Sua Música session did not match any extension tab -> kept in GSMTC!
+        assert "windows:chrome.exe:0" in session_ids
+        sua_musica_sess = next(s for s in s_with_ext.sessions if s.id == "windows:chrome.exe:0")
+        assert sua_musica_sess.app == "Chrome (controle básico)"
+        assert sua_musica_sess.title == "MC Ryan SP - Tubarão - Sua Música"
+
+        # 3. Now extension also detects Sua Música via detached media tracking!
+        await ext.handle_message(
+            {
+                "v": 1,
+                "type": "extension_state",
+                "tabs": [
+                    {
+                        "tabId": "201",
+                        "title": "Never Gonna Give You Up",
+                        "channel": "Rick Astley",
+                        "status": "PAUSED",
+                    },
+                    {
+                        "tabId": "202",
+                        "title": "MC Ryan SP - Tubarão",
+                        "channel": "Sua Música",
+                        "status": "PLAYING",
+                    },
+                ],
+            }
+        )
+        s_both_ext = await coord.build_state()
+        both_ids = [s.id for s in s_both_ext.sessions]
+        # Now BOTH are covered by extension, so both GSMTC duplicates are hidden!
+        assert "chrome:201" in both_ids
+        assert "chrome:202" in both_ids
+        assert "windows:chrome.exe:0" not in both_ids
+        assert "windows:chrome.exe:1" not in both_ids
+
+    asyncio.run(_test())

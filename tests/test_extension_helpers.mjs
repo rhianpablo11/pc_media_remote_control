@@ -279,3 +279,54 @@ test("playback command idempotency and error reasons behave deterministically", 
   const shouldRespondInSubframe = isTop || hasMedia;
   assert.equal(shouldRespondInSubframe, false);
 });
+
+test("stripSiteSuffix cleans notification prefixes and site suffixes across web players", () => {
+  assert.equal(
+    contentHelpers.stripSiteSuffix("(1) Iguinho e Lulinha - Ao Vivo em Petrolina - Sua Música"),
+    "Iguinho e Lulinha - Ao Vivo em Petrolina"
+  );
+  assert.equal(
+    contentHelpers.stripSiteSuffix("Zé Vaqueiro | Sua Música"),
+    "Zé Vaqueiro"
+  );
+  assert.equal(
+    contentHelpers.stripSiteSuffix("Sua Música - O maior site de música do Brasil - Sua Música"),
+    "Sua Música - O maior site de música do Brasil"
+  );
+  assert.equal(
+    contentHelpers.stripSiteSuffix("(2509) Never Gonna Give You Up - YouTube"),
+    "Never Gonna Give You Up"
+  );
+  assert.equal(
+    contentHelpers.stripSiteSuffix("Chill Beats | Spotify Web Player"),
+    "Chill Beats"
+  );
+  assert.equal(
+    contentHelpers.stripSiteSuffix("Indie Band - Song Title - soundcloud", "soundcloud.com"),
+    "Indie Band - Song Title"
+  );
+  assert.equal(
+    contentHelpers.stripSiteSuffix("Generic Video - customsite", "customsite.com.br"),
+    "Generic Video"
+  );
+});
+
+test("mergeMediaMetadata falls back to OpenGraph and cleans site suffixes on generic players", () => {
+  const generic = contentHelpers.mergeMediaMetadata({
+    domMeta: {
+      title: "Iguinho e Lulinha - Ao Vivo em Petrolina - Sua Música",
+      artist: "Sua Música",
+      artworkUrl: "https://images.suamusica.com.br/covers/album123.jpg",
+    },
+    hostname: "www.suamusica.com.br",
+    isolatedMeta: null,
+    isYouTube: false,
+    mainMeta: null,
+  });
+
+  assert.equal(generic.title, "Iguinho e Lulinha - Ao Vivo em Petrolina");
+  assert.equal(generic.artist, "Sua Música");
+  assert.equal(generic.artworkUrl, "https://images.suamusica.com.br/covers/album123.jpg");
+  assert.equal(generic.probe.domReadable, true);
+  assert.equal(generic.probe.mainReadable, false);
+});

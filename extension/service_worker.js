@@ -11,6 +11,7 @@ import {
 } from "./service_worker_helpers.js";
 
 const tabStates = new Map();
+const tabFrameStates = new Map();
 let ws = null;
 let reconnectTimer = null;
 let keepaliveTimer = null;
@@ -169,9 +170,10 @@ async function pollAllOpenTabs() {
   }
 }
 
-async function sendMessageToTab(tabId, payload) {
+async function sendMessageToTab(tabId, payload, frameId = undefined) {
   try {
-    return await chrome.tabs.sendMessage(tabId, payload);
+    const options = typeof frameId === "number" && frameId > 0 ? { frameId } : undefined;
+    return await chrome.tabs.sendMessage(tabId, payload, options);
   } catch {
     return null;
   }
@@ -201,11 +203,16 @@ async function handleHostCommand(msg) {
 
   let response = null;
   try {
-    const msgPromise = sendMessageToTab(tabId, {
-      type: "media_command",
-      action: msg.action,
-      value: msg.value,
-    });
+    const targetFrameId = tabStates.get(tabId)?._frameId;
+    const msgPromise = sendMessageToTab(
+      tabId,
+      {
+        type: "media_command",
+        action: msg.action,
+        value: msg.value,
+      },
+      targetFrameId
+    );
     const timeoutPromise = new Promise((resolve) =>
       setTimeout(() => resolve({ ok: false, reason: "timeout" }), 1800)
     );
@@ -265,11 +272,16 @@ async function handleHostVolume(msg) {
   let elementApplied = true;
   let elementReason;
   if (typeof msg.value === "number" || msg.muted === false) {
-    const res = await sendMessageToTab(tabId, {
-      type: "tab_media_volume",
-      value: typeof msg.value === "number" ? msg.value : undefined,
-      unmuteElement: msg.muted === false,
-    });
+    const targetFrameId = tabStates.get(tabId)?._frameId;
+    const res = await sendMessageToTab(
+      tabId,
+      {
+        type: "tab_media_volume",
+        value: typeof msg.value === "number" ? msg.value : undefined,
+        unmuteElement: msg.muted === false,
+      },
+      targetFrameId
+    );
     elementApplied = Boolean(res && res.ok);
     elementReason = res?.reason;
   }
@@ -382,6 +394,42 @@ function connectWebSocket() {
   };
 }
 
+function recomputeTabState(tabId) {
+  const frames = tabFrameStates.get(tabId);
+  if (!frames || frames.size === 0) {
+    if (tabStates.delete(tabId)) {
+      sendExtensionState();
+      void persistDiagnostics();
+    }
+    return;
+  }
+
+  let best = null;
+  for (const entry of frames.values()) {
+    if (!best) {
+      best = entry;
+      continue;
+    }
+    if (entry.status === "PLAYING" && best.status !== "PLAYING") {
+      best = entry;
+    } else if (entry._frameId === 0 && best._frameId !== 0 && best.status !== "PLAYING") {
+      best = entry;
+    }
+  }
+
+  if (best) {
+    if (best.metadataProbe) {
+      diagnostics.lastMetadataProbe = best.metadataProbe;
+    }
+    tabStates.set(tabId, best);
+    sendExtensionState();
+    void persistDiagnostics();
+  } else if (tabStates.delete(tabId)) {
+    sendExtensionState();
+    void persistDiagnostics();
+  }
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message !== "object") return false;
 
@@ -406,21 +454,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === "tab_media_state" && sender.tab && sender.tab.id) {
     const tabId = sender.tab.id;
+    const frameId = typeof sender.frameId === "number" ? sender.frameId : 0;
     const entry = mergeTabEntry(tabId, message.payload, sender.tab);
-    if (!entry) {
-      if (tabStates.delete(tabId)) {
-        sendExtensionState();
-        void persistDiagnostics();
+
+    if (entry) {
+      entry._frameId = frameId;
+      if (!tabFrameStates.has(tabId)) {
+        tabFrameStates.set(tabId, new Map());
       }
-      return false;
+      tabFrameStates.get(tabId).set(frameId, entry);
+    } else if (tabFrameStates.has(tabId)) {
+      tabFrameStates.get(tabId).delete(frameId);
     }
 
-    if (entry.metadataProbe) {
-      diagnostics.lastMetadataProbe = entry.metadataProbe;
-    }
-    tabStates.set(tabId, entry);
-    sendExtensionState();
-    void persistDiagnostics();
+    recomputeTabState(tabId);
     return false;
   }
 
@@ -428,6 +475,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
+  tabFrameStates.delete(tabId);
   if (tabStates.delete(tabId)) {
     sendExtensionState();
     void persistDiagnostics();
@@ -436,6 +484,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.url && !isTrackableWebUrl(changeInfo.url)) {
+    tabFrameStates.delete(tabId);
     if (tabStates.delete(tabId)) {
       sendExtensionState();
     }

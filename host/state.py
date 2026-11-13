@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
+import unicodedata
 from collections.abc import Sequence
 from dataclasses import replace
 from typing import Any
@@ -38,6 +40,35 @@ from host.providers.base import (
 logger = logging.getLogger(__name__)
 
 CHROME_GSMTC_APP_IDS = {"chrome.exe", "chrome"}
+
+_NOTIFICATION_PREFIX_RE = re.compile(r"^\(\d+\+?\)\s*")
+_SITE_SUFFIX_RE = re.compile(
+    r"\s*[-|–—]\s*(?:Sua\s*M[uú]sica(?:(?:\s*-\s*)?O\s*maior\s*site\s*de\s*m[uú]sica\s*do\s*Brasil)?|YouTube(?:\s*Music)?|Spotify(?:\s*Web\s*Player)?|SoundCloud|Deezer|Netflix|Twitch|Bandcamp|Vimeo|Apple\s*Music)\s*$",
+    re.IGNORECASE,
+)
+
+
+def normalize_session_title(title: str | None) -> str:
+    """Normalize a session title for deduplication matching between GSMTC and extension."""
+    if not title:
+        return ""
+    t = _NOTIFICATION_PREFIX_RE.sub("", title.strip())
+    t = _SITE_SUFFIX_RE.sub("", t).strip(" -|–—_").strip()
+    norm = unicodedata.normalize("NFKD", t)
+    ascii_clean = "".join(c for c in norm if not unicodedata.combining(c)).lower()
+    cleaned = re.sub(r"[^\w\s]", " ", ascii_clean)
+    return " ".join(cleaned.split())
+
+
+def session_titles_match(title_a: str | None, title_b: str | None) -> bool:
+    """Check if two session titles match for deduplication purposes."""
+    norm_a = normalize_session_title(title_a)
+    norm_b = normalize_session_title(title_b)
+    if not norm_a or not norm_b:
+        return False
+    if norm_a == norm_b:
+        return True
+    return bool((len(norm_a) >= 5 and norm_a in norm_b) or (len(norm_b) >= 5 and norm_b in norm_a))
 
 
 def _is_chrome_gsmtc_session(session: MediaSessionInfo) -> bool:
@@ -103,19 +134,33 @@ class HostStateCoordinator:
             return await self._build_state_unlocked()
 
     async def _build_state_unlocked(self) -> StateMessage:
-        hide_chrome_gsmtc = self.extension_connected
-
-        raw_sessions: list[MediaSessionInfo] = []
+        all_raw_sessions: list[MediaSessionInfo] = []
         for provider in self._providers:
             try:
                 items = await provider.list_sessions()
             except Exception:  # noqa: BLE001
                 logger.exception("Falha ao listar sessões do provedor %s", provider.source)
                 continue
-            for item in items:
-                if hide_chrome_gsmtc and _is_chrome_gsmtc_session(item):
-                    continue
-                raw_sessions.append(item)
+            all_raw_sessions.extend(items)
+
+        extension_titles = [
+            s.title
+            for s in all_raw_sessions
+            if s.source in ("chrome_extension", "chrome") and s.title
+        ]
+
+        raw_sessions: list[MediaSessionInfo] = []
+        for item in all_raw_sessions:
+            if _is_chrome_gsmtc_session(item):
+                if self.extension_connected:
+                    is_duplicate = any(
+                        session_titles_match(item.title, ext_title)
+                        for ext_title in extension_titles
+                    )
+                    if is_duplicate:
+                        continue
+                item = replace(item, app="Chrome (controle básico)")
+            raw_sessions.append(item)
 
         try:
             master = await self._audio_provider.get_master_volume()
@@ -152,7 +197,7 @@ class HostStateCoordinator:
             activeSessionId=active_id,
             masterVolume=master_to_payload(master),
             audioSessions=[audio_app_to_payload(a) for a in audio_apps],
-            extensionConnected=hide_chrome_gsmtc,
+            extensionConnected=self.extension_connected,
         )
 
     def _resolve_active_session_id(self, sessions: list[MediaSessionInfo]) -> str | None:

@@ -21,6 +21,7 @@
   const boundElements = new WeakSet();
 
   let mainWorldSnapshot = { metadata: null, playbackState: "none" };
+  let detachedMediaSnapshot = null;
   let lastTimeUpdateSentAt = 0;
   let mutationTimer = null;
   let lastSentKey = "";
@@ -230,14 +231,25 @@
 
     const poster =
       mediaEl && mediaEl.tagName === "VIDEO" && mediaEl.poster ? mediaEl.poster : null;
-    const rawTitle =
-      queryMetaContent('meta[property="og:title"]') || (document.title || "").trim();
-    const title = helpers.cleanMediaTitle(rawTitle);
+    const ogTitle =
+      queryMetaContent('meta[property="og:title"]') || queryMetaContent('meta[name="og:title"]');
+    const rawTitle = ogTitle || (document.title || "").trim();
+    const title = helpers.stripSiteSuffix
+      ? helpers.stripSiteSuffix(rawTitle, host)
+      : helpers.cleanMediaTitle(rawTitle);
     const artist =
       queryMetaContent('meta[name="author"]') ||
+      queryMetaContent('meta[property="article:author"]') ||
       queryMetaContent('meta[property="og:site_name"]') ||
+      queryMetaContent('meta[name="og:site_name"]') ||
       host.replace(/^www\./i, "");
-    const artworkUrl = poster || queryMetaContent('meta[property="og:image"]') || null;
+    const artworkUrl =
+      poster ||
+      queryMetaContent('meta[property="og:image"]') ||
+      queryMetaContent('meta[name="og:image"]') ||
+      queryMetaContent('meta[property="twitter:image"]') ||
+      queryMetaContent('meta[name="twitter:image"]') ||
+      null;
 
     return { title, artist, artworkUrl };
   }
@@ -250,8 +262,14 @@
       !mediaEl &&
       (Boolean(mainWorldSnapshot.metadata) || Boolean(isolated.metadata)) &&
       (mainWorldSnapshot.playbackState !== "none" || isolated.playbackState !== "none");
+    const hasDetachedMedia = Boolean(
+      detachedMediaSnapshot &&
+        (!detachedMediaSnapshot.paused ||
+          detachedMediaSnapshot.currentTime > 0 ||
+          detachedMediaSnapshot.currentSrc)
+    );
 
-    if (!mediaEl && !hasActiveSessionOnly) {
+    if (!mediaEl && !hasActiveSessionOnly && !hasDetachedMedia) {
       return {
         hasMedia: false,
         url: window.location.href,
@@ -264,6 +282,7 @@
       mainMeta: mainWorldSnapshot.metadata,
       domMeta,
       isYouTube: isYT,
+      hostname: window.location.hostname,
     });
 
     let status = "PAUSED";
@@ -281,6 +300,22 @@
       duration = Number.isFinite(mediaEl.duration) ? Math.max(0, mediaEl.duration) : 0;
       volume = typeof mediaEl.volume === "number" ? Math.max(0, Math.min(1, mediaEl.volume)) : 1;
       elementMuted = Boolean(mediaEl.muted);
+    } else if (hasDetachedMedia && detachedMediaSnapshot) {
+      if (detachedMediaSnapshot.ended) status = "STOPPED";
+      else if (detachedMediaSnapshot.paused) status = "PAUSED";
+      else status = "PLAYING";
+
+      position = Number.isFinite(detachedMediaSnapshot.currentTime)
+        ? Math.max(0, detachedMediaSnapshot.currentTime)
+        : 0;
+      duration = Number.isFinite(detachedMediaSnapshot.duration)
+        ? Math.max(0, detachedMediaSnapshot.duration)
+        : 0;
+      volume =
+        typeof detachedMediaSnapshot.volume === "number"
+          ? Math.max(0, Math.min(1, detachedMediaSnapshot.volume))
+          : 1;
+      elementMuted = Boolean(detachedMediaSnapshot.muted);
     } else {
       const pbState = mainWorldSnapshot.playbackState || isolated.playbackState;
       status = pbState === "playing" ? "PLAYING" : "PAUSED";
@@ -289,26 +324,29 @@
     const skipBtn = isYT ? findClickableSkipAdButton() : null;
     const nextBtn = isYT ? findReadyYoutubeControl(".ytp-next-button") : null;
     const prevBtn = isYT ? findReadyYoutubeControl(".ytp-prev-button") : null;
+    const cleanDocTitle = helpers.stripSiteSuffix
+      ? helpers.stripSiteSuffix(document.title || "", window.location.hostname)
+      : helpers.cleanMediaTitle(document.title || "");
 
     return {
       hasMedia: true,
       url: window.location.href,
-      title: merged.title || helpers.cleanMediaTitle(document.title || "") || window.location.hostname,
+      title: merged.title || cleanDocTitle || window.location.hostname,
       artist: merged.artist || "",
       album: merged.album || "",
-      artworkUrl: merged.artworkUrl || null,
+      artworkUrl: merged.artworkUrl || domMeta.artworkUrl || null,
       status,
       position: Math.round(position * 100) / 100,
       duration: Math.round(duration * 100) / 100,
       volume: Math.round(volume * 1000) / 1000,
       elementMuted,
       controls: {
-        play: Boolean(mediaEl),
-        pause: Boolean(mediaEl),
-        toggle: Boolean(mediaEl),
+        play: Boolean(mediaEl || hasDetachedMedia),
+        pause: Boolean(mediaEl || hasDetachedMedia),
+        toggle: Boolean(mediaEl || hasDetachedMedia),
         next: Boolean(nextBtn),
         previous: Boolean(prevBtn),
-        seek: Boolean(mediaEl && (duration > 0 || position > 0)),
+        seek: Boolean((mediaEl || hasDetachedMedia) && (duration > 0 || position > 0)),
         skipAd: Boolean(skipBtn),
       },
       metadataProbe: merged.probe,
@@ -397,7 +435,19 @@
       return { ok: true };
     }
 
-    if (!mediaEl) return { ok: false, reason: "no_media_element" };
+    if (!mediaEl) {
+      if (
+        detachedMediaSnapshot &&
+        (!detachedMediaSnapshot.paused ||
+          detachedMediaSnapshot.currentTime > 0 ||
+          detachedMediaSnapshot.currentSrc)
+      ) {
+        const res = await executeDetachedCommandViaBridge(action, value);
+        setTimeout(() => sendSnapshot(true), 120);
+        return res;
+      }
+      return { ok: false, reason: "no_media_element" };
+    }
 
     if (action === "play") {
       if (!mediaEl.paused) {
@@ -460,9 +510,62 @@
     return { ok: false, reason: "unknown_action" };
   }
 
+  function executeDetachedCommandViaBridge(action, value, unmuteElement = false) {
+    return new Promise((resolve) => {
+      const commandId = `cmd_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      const origin = window.location.origin;
+      if (!origin || origin === "null") {
+        resolve({ ok: false, reason: "invalid_origin" });
+        return;
+      }
+
+      let timer = null;
+      const handler = (evt) => {
+        if (evt.source !== window || evt.origin !== window.location.origin) return;
+        const data = evt.data;
+        if (
+          data &&
+          data.source === MAIN_BRIDGE_SOURCE &&
+          data.type === "execute_detached_command_ack" &&
+          data.commandId === commandId
+        ) {
+          window.removeEventListener("message", handler);
+          if (timer !== null) clearTimeout(timer);
+          resolve({ ok: Boolean(data.ok), reason: data.reason });
+        }
+      };
+
+      timer = setTimeout(() => {
+        window.removeEventListener("message", handler);
+        resolve({ ok: false, reason: "detached_command_timeout" });
+      }, 1500);
+
+      window.addEventListener("message", handler);
+      window.postMessage(
+        {
+          source: ISOLATED_REQUEST_SOURCE,
+          type: "execute_detached_command",
+          commandId,
+          action,
+          value,
+          elementId: detachedMediaSnapshot ? detachedMediaSnapshot.id : null,
+          unmuteElement,
+        },
+        origin
+      );
+    });
+  }
+
   function applyElementVolume(level, unmuteElement) {
     const mediaEl = collectMediaElements();
-    if (!mediaEl) return false;
+    if (!mediaEl) {
+      if (detachedMediaSnapshot) {
+        void executeDetachedCommandViaBridge("volume", level, unmuteElement);
+        setTimeout(() => sendSnapshot(true), 100);
+        return true;
+      }
+      return false;
+    }
     if (typeof level === "number") {
       const clamped = helpers.clampVolume(level);
       if (clamped === null) return false;
@@ -480,9 +583,21 @@
       return;
     }
     const data = event.data;
-    if (data && data.source === MAIN_BRIDGE_SOURCE && data.type === "media_session_snapshot") {
-      mainWorldSnapshot = data.payload || { metadata: null, playbackState: "none" };
-      sendSnapshot(false);
+    if (data && data.source === MAIN_BRIDGE_SOURCE) {
+      if (data.type === "media_session_snapshot" || data.type === "media_snapshot_update") {
+        if (data.mediaSession) {
+          mainWorldSnapshot = data.mediaSession;
+        } else if (data.payload) {
+          mainWorldSnapshot = data.payload;
+        }
+        if (data.detachedMedia !== undefined) {
+          detachedMediaSnapshot = data.detachedMedia;
+        }
+        sendSnapshot(false);
+      } else if (data.type === "detached_media_snapshot") {
+        detachedMediaSnapshot = data.payload || null;
+        sendSnapshot(false);
+      }
     }
   });
 
@@ -506,13 +621,23 @@
     }, 300);
   });
 
-  if (document.body) {
+  function initObserver() {
+    if (!document.body) return;
     observer.observe(document.body, {
       childList: true,
       subtree: true,
       attributes: true,
       attributeFilter: ["class", "style", "disabled", "aria-disabled", "src", "is-active"],
     });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => {
+      initObserver();
+      sendSnapshot(false);
+    });
+  } else {
+    initObserver();
   }
 
   // Document-level capture ensures newly mounted Shorts <video> elements report
@@ -536,7 +661,13 @@
 
     if (message.type === "request_media_state") {
       const mediaEl = collectMediaElements();
-      if (window !== window.top && !mediaEl) {
+      const hasDetached = Boolean(
+        detachedMediaSnapshot &&
+          (!detachedMediaSnapshot.paused ||
+            detachedMediaSnapshot.currentTime > 0 ||
+            detachedMediaSnapshot.currentSrc)
+      );
+      if (window !== window.top && !mediaEl && !hasDetached) {
         return false;
       }
       if (window.location.origin && window.location.origin !== "null") {
@@ -553,14 +684,20 @@
 
     if (message.type === "media_command") {
       const mediaEl = collectMediaElements();
+      const hasDetached = Boolean(
+        detachedMediaSnapshot &&
+          (!detachedMediaSnapshot.paused ||
+            detachedMediaSnapshot.currentTime > 0 ||
+            detachedMediaSnapshot.currentSrc)
+      );
       // Crucial: Only the frame with the primary media element responds!
       // In subframes without media elements (e.g. ad iframes), DO NOT sendResponse so we don't swallow main frame's ack.
-      if (window !== window.top && !mediaEl) {
+      if (window !== window.top && !mediaEl && !hasDetached) {
         return false;
       }
 
       const isButtonCommand = ["skip_ad", "next", "previous"].includes(message.action);
-      if (!mediaEl && !isButtonCommand) {
+      if (!mediaEl && !hasDetached && !isButtonCommand) {
         sendResponse({ ok: false, reason: "no_media_element" });
         return false;
       }
@@ -577,7 +714,13 @@
 
     if (message.type === "tab_media_volume") {
       const mediaEl = collectMediaElements();
-      if (window !== window.top && !mediaEl) {
+      const hasDetached = Boolean(
+        detachedMediaSnapshot &&
+          (!detachedMediaSnapshot.paused ||
+            detachedMediaSnapshot.currentTime > 0 ||
+            detachedMediaSnapshot.currentSrc)
+      );
+      if (window !== window.top && !mediaEl && !hasDetached) {
         return false;
       }
       const ok = applyElementVolume(message.value, message.unmuteElement);
