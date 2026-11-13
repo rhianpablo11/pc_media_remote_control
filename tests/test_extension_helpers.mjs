@@ -394,3 +394,76 @@ test("parseSearchResults parses real fixture, filters ads/channels/playlists and
   assert.equal(limited.length, 2);
 });
 
+test("isYoutubeAdShowing detects ad-showing, ad-interrupting and video-ads", () => {
+  assert.equal(contentHelpers.isYoutubeAdShowing(null), false);
+
+  // Mock doc with ad-showing class on movie player
+  const mockDocWithAd = {
+    querySelector: (sel) => {
+      if (sel.includes("#movie_player")) {
+        return {
+          classList: {
+            contains: (c) => c === "ad-showing",
+          },
+        };
+      }
+      return null;
+    },
+  };
+  assert.equal(contentHelpers.isYoutubeAdShowing(mockDocWithAd), true);
+
+  // Mock doc with ad-interrupting class
+  const mockDocWithInterrupting = {
+    querySelector: (sel) => {
+      if (sel.includes("#movie_player")) {
+        return {
+          classList: {
+            contains: (c) => c === "ad-interrupting",
+          },
+        };
+      }
+      return null;
+    },
+  };
+  assert.equal(contentHelpers.isYoutubeAdShowing(mockDocWithInterrupting), true);
+
+  // Mock doc with video-ads container having children
+  const mockDocWithAdsContainer = {
+    querySelector: (sel) => {
+      if (sel.includes("#movie_player")) {
+        return { classList: { contains: () => false } };
+      }
+      if (sel.includes(".video-ads")) {
+        return { children: [{ tagName: "DIV" }] };
+      }
+      return null;
+    },
+  };
+  assert.equal(contentHelpers.isYoutubeAdShowing(mockDocWithAdsContainer), true);
+
+  // Mock doc with no ads
+  const mockDocNoAds = {
+    querySelector: (sel) => {
+      if (sel.includes("#movie_player")) {
+        return { classList: { contains: () => false } };
+      }
+      if (sel.includes(".video-ads")) {
+        return { children: [] };
+      }
+      return null;
+    },
+  };
+  assert.equal(contentHelpers.isYoutubeAdShowing(mockDocNoAds), false);
+});
+
+test("SKIP_AD_SELECTORS covers modern YouTube ad skip button selectors", () => {
+  const sel = contentHelpers.SKIP_AD_SELECTORS;
+  assert.ok(sel.includes(".ytp-ad-skip-button-modern"));
+  assert.ok(sel.includes(".ytp-skip-ad-button"));
+  assert.ok(sel.includes(".ytp-ad-skip-button"));
+  assert.ok(sel.includes(".ytp-ad-skip-button-slot button"));
+  assert.ok(sel.includes("[id^='skip-button:'] button"));
+  assert.ok(sel.includes("button.ytp-ad-overlay-close-button"));
+});
+
+

@@ -334,3 +334,41 @@ async def test_coordinator_toggle_fullscreen_and_play_video() -> None:
         assert getattr(fs_ack, "ok", False) is True
     finally:
         worker.cancel()
+
+
+@pytest.mark.anyio
+async def test_chrome_extension_provider_trigger_fullscreen_key() -> None:
+    chrome = ChromeExtensionProvider()
+    transport = FakeExtensionTransport()
+    chrome.attach(transport)
+
+    async def reply_fullscreen_trigger(req_id: str) -> None:
+        await asyncio.sleep(0.01)
+        await chrome.handle_message(
+            {
+                "type": "extension_ack",
+                "requestId": req_id,
+                "ok": True,
+                "reason": "trigger_fullscreen_key",
+            }
+        )
+
+    async def worker_loop() -> None:
+        while True:
+            await asyncio.sleep(0.01)
+            for item in list(transport.sent):
+                req_id = item.get("requestId")
+                if req_id:
+                    asyncio.create_task(reply_fullscreen_trigger(req_id))
+                    return
+
+    worker = asyncio.create_task(worker_loop())
+    try:
+        ok, reason = await chrome.execute_command_with_reason(
+            "chrome:42", "toggle_fullscreen", None
+        )
+        assert ok is True
+        assert reason == "entered_fullscreen_via_key"
+    finally:
+        worker.cancel()
+

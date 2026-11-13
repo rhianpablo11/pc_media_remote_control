@@ -321,6 +321,7 @@
       status = pbState === "playing" ? "PLAYING" : "PAUSED";
     }
 
+    const isAdShowing = isYT && typeof helpers.isYoutubeAdShowing === "function" ? helpers.isYoutubeAdShowing() : false;
     const skipBtn = isYT ? findClickableSkipAdButton() : null;
     const nextBtn = isYT ? findReadyYoutubeControl(".ytp-next-button") : null;
     const prevBtn = isYT ? findReadyYoutubeControl(".ytp-prev-button") : null;
@@ -348,7 +349,7 @@
         next: Boolean(nextBtn),
         previous: Boolean(prevBtn),
         seek: Boolean((mediaEl || hasDetachedMedia) && (duration > 0 || position > 0)),
-        skipAd: Boolean(skipBtn),
+        skipAd: Boolean(skipBtn || isAdShowing),
         fullscreen: true,
       },
       metadataProbe: merged.probe,
@@ -414,11 +415,52 @@
     });
 
     if (action === "skip_ad") {
+      let skipped = false;
       const skipBtn = findClickableSkipAdButton();
-      if (!skipBtn) return { ok: false, reason: "skip_ad_button_not_found" };
-      skipBtn.click();
+      if (skipBtn) {
+        if (typeof helpers.triggerPointerAndClick === "function") {
+          helpers.triggerPointerAndClick(skipBtn);
+          if (skipBtn.parentElement && skipBtn.parentElement !== document.body) {
+            helpers.triggerPointerAndClick(skipBtn.parentElement);
+          }
+        } else {
+          skipBtn.click();
+        }
+        skipped = true;
+      }
+
+      const overlays = document.querySelectorAll(
+        ".ytp-ad-overlay-close-button, button.ytp-ad-overlay-close-button, [aria-label*='Fechar anúncio' i], [aria-label*='Close ad' i]"
+      );
+      for (const btn of overlays) {
+        if (isElementVisibleAndEnabled(btn)) {
+          if (typeof helpers.triggerPointerAndClick === "function") {
+            helpers.triggerPointerAndClick(btn);
+          } else {
+            btn.click();
+          }
+          skipped = true;
+        }
+      }
+
+      const isAd = typeof helpers.isYoutubeAdShowing === "function" ? helpers.isYoutubeAdShowing() : false;
+      if (isAd || !skipped) {
+        const ads = document.querySelectorAll("#movie_player video, .html5-main-video");
+        for (const vid of ads) {
+          if (Number.isFinite(vid.duration) && vid.duration > 0) {
+            try {
+              vid.currentTime = vid.duration;
+              skipped = true;
+            } catch {}
+          }
+        }
+      }
+
       setTimeout(() => sendSnapshot(true), 150);
-      return { ok: true };
+      if (skipped || isAd) {
+        return { ok: true, reason: "ad_skipped" };
+      }
+      return { ok: false, reason: "skip_ad_button_not_found" };
     }
 
     if (action === "next") {
@@ -438,9 +480,11 @@
     }
 
     if (action === "toggle_fullscreen" || action === "fullscreen") {
+      const isCurrentlyFullscreen = Boolean(document.fullscreenElement);
       const shouldFullscreen =
-        action === "fullscreen" ? Boolean(value) : !document.fullscreenElement;
-      if (!shouldFullscreen && document.fullscreenElement) {
+        action === "fullscreen" ? Boolean(value) : !isCurrentlyFullscreen;
+
+      if (!shouldFullscreen && isCurrentlyFullscreen) {
         try {
           await document.exitFullscreen();
           setTimeout(() => sendSnapshot(true), 100);
@@ -449,9 +493,25 @@
           return { ok: false, reason: "exit_fullscreen_failed" };
         }
       }
-      if (shouldFullscreen && !document.fullscreenElement) {
+
+      if (shouldFullscreen && !isCurrentlyFullscreen) {
+        // Blur any focused input/textarea so keystrokes sent by host won't type text
+        if (
+          document.activeElement &&
+          (document.activeElement.tagName === "INPUT" ||
+            document.activeElement.tagName === "TEXTAREA" ||
+            document.activeElement.isContentEditable)
+        ) {
+          document.activeElement.blur();
+        }
+
+        const player = document.querySelector("#movie_player, .html5-video-player");
+        if (player && typeof player.focus === "function") {
+          player.focus();
+        }
+
         const target =
-          mediaEl || document.querySelector("#movie_player") || document.documentElement;
+          player || mediaEl || document.documentElement;
         try {
           await target.requestFullscreen();
           setTimeout(() => sendSnapshot(true), 100);
@@ -685,6 +745,7 @@
   }
 
   document.addEventListener("fullscreenchange", () => sendSnapshot(true));
+  document.addEventListener("webkitfullscreenchange", () => sendSnapshot(true));
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (!message || typeof message !== "object") return false;
@@ -716,6 +777,25 @@
       const mediaEl = collectMediaElements();
       if (mediaEl && mediaEl.paused) {
         mediaEl.play().catch(() => {});
+      }
+      if (message.fullscreen && !document.fullscreenElement) {
+        if (
+          document.activeElement &&
+          (document.activeElement.tagName === "INPUT" ||
+            document.activeElement.tagName === "TEXTAREA" ||
+            document.activeElement.isContentEditable)
+        ) {
+          document.activeElement.blur();
+        }
+        const player = document.querySelector("#movie_player, .html5-video-player");
+        if (player && typeof player.focus === "function") {
+          player.focus();
+        }
+        try {
+          chrome.runtime.sendMessage({ type: "request_fullscreen_key" }, () => {
+            void chrome.runtime.lastError;
+          });
+        } catch {}
       }
       setTimeout(() => sendSnapshot(true), 300);
       sendResponse({ ok: true });

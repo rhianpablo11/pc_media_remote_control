@@ -7,12 +7,67 @@
   "use strict";
 
   const SKIP_AD_SELECTORS = [
+    ".ytp-ad-skip-button-modern",
     ".ytp-skip-ad-button",
     ".ytp-ad-skip-button",
-    ".ytp-ad-skip-button-modern",
+    "button.ytp-ad-skip-button-modern",
     "button.ytp-skip-ad-button",
+    ".ytp-ad-skip-button-slot button",
+    ".ytp-ad-skip-button-container button",
+    ".ytp-ad-skip-button-text",
+    ".ytp-ad-skip-button-text-modern",
+    "[id^='skip-button:'] button",
+    "button[id^='skip-button:']",
+    "[id^='skip-button:']",
     ".videoAdUiSkipButton",
+    ".ytp-ad-preview-container",
+    "button.ytp-ad-overlay-close-button",
+    ".ytp-ad-overlay-close-button",
+    "[aria-label*='Pular' i]",
+    "[aria-label*='Skip' i]",
   ];
+
+  function isYoutubeAdShowing(doc = (typeof document !== "undefined" ? document : null)) {
+    if (!doc) return false;
+    const player = doc.querySelector("#movie_player, .html5-video-player");
+    if (player) {
+      if (
+        player.classList.contains("ad-showing") ||
+        player.classList.contains("ad-interrupting")
+      ) {
+        return true;
+      }
+    }
+    const adsContainer = doc.querySelector(".video-ads, .ytp-ad-player-overlay");
+    if (adsContainer && adsContainer.children && adsContainer.children.length > 0) {
+      return true;
+    }
+    return false;
+  }
+
+  function triggerPointerAndClick(element) {
+    if (!element) return;
+    const win = typeof window !== "undefined" ? window : undefined;
+    const opts = { bubbles: true, cancelable: true, view: win };
+    if (typeof PointerEvent === "function") {
+      element.dispatchEvent(new PointerEvent("pointerdown", opts));
+    }
+    if (typeof MouseEvent === "function") {
+      element.dispatchEvent(new MouseEvent("mousedown", opts));
+    }
+    if (typeof PointerEvent === "function") {
+      element.dispatchEvent(new PointerEvent("pointerup", opts));
+    }
+    if (typeof MouseEvent === "function") {
+      element.dispatchEvent(new MouseEvent("mouseup", opts));
+      element.dispatchEvent(new MouseEvent("click", opts));
+    }
+    if (typeof element.click === "function") {
+      try {
+        element.click();
+      } catch {}
+    }
+  }
 
   function extractYoutubeVideoId(urlStr) {
     if (!urlStr) return null;
@@ -221,6 +276,8 @@
     SITE_SUFFIX_PATTERN,
     extractYoutubeVideoId,
     isYoutubeHost,
+    isYoutubeAdShowing,
+    triggerPointerAndClick,
     youtubeThumbnailUrl,
     cleanMediaTitle,
     stripSiteSuffix,

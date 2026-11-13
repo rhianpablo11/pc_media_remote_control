@@ -234,18 +234,19 @@ async function handleHostCommand(msg) {
     msg.action === "fullscreen"
   ) {
     try {
-      if (typeof tab.windowId === "number") {
-        const win = await chrome.windows.get(tab.windowId);
-        const nextState = win.state === "fullscreen" ? "normal" : "fullscreen";
-        await chrome.windows.update(tab.windowId, { state: nextState, focused: true });
-        sendAck(msg.requestId, true, `window_${nextState}`);
-        return;
+      if (typeof tab.id === "number") {
+        await chrome.tabs.update(tab.id, { active: true }).catch(() => {});
       }
-    } catch (err) {
-      sendAck(msg.requestId, false, err?.message || "fullscreen_failed");
-      return;
-    }
-    sendAck(msg.requestId, false, response?.reason || "command_failed");
+      if (typeof tab.windowId === "number") {
+        const win = await chrome.windows.get(tab.windowId).catch(() => null);
+        if (win && win.state === "fullscreen" && response?.reason === "exited_fullscreen") {
+          await chrome.windows.update(tab.windowId, { state: "normal", focused: true }).catch(() => {});
+        } else {
+          await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+        }
+      }
+    } catch {}
+    sendAck(msg.requestId, true, "trigger_fullscreen_key");
   } else {
     sendAck(msg.requestId, false, response?.reason || "command_failed");
   }
@@ -439,9 +440,6 @@ async function handleHostPlayVideo(msg) {
         await chrome.tabs.update(targetTab.id, { url: targetUrl, active: true });
         if (typeof targetTab.windowId === "number") {
           await chrome.windows.update(targetTab.windowId, { focused: true }).catch(() => {});
-          if (preserveFullscreen) {
-            await chrome.windows.update(targetTab.windowId, { state: "fullscreen" }).catch(() => {});
-          }
         }
         pendingPlayTabs.set(targetTab.id, { fullscreen: preserveFullscreen, ts: Date.now() });
         sendAck(requestId, true, "navigated_existing_tab");
@@ -452,9 +450,6 @@ async function handleHostPlayVideo(msg) {
     const createdTab = await chrome.tabs.create({ url: targetUrl, active: true });
     if (createdTab && typeof createdTab.windowId === "number") {
       await chrome.windows.update(createdTab.windowId, { focused: true }).catch(() => {});
-      if (preserveFullscreen) {
-        await chrome.windows.update(createdTab.windowId, { state: "fullscreen" }).catch(() => {});
-      }
     }
     if (createdTab && createdTab.id) {
       pendingPlayTabs.set(createdTab.id, { fullscreen: preserveFullscreen, ts: Date.now() });
@@ -632,6 +627,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     } else {
       connectWebSocket();
     }
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  if (message.type === "request_fullscreen_key") {
+    if (sender && sender.tab) {
+      if (typeof sender.tab.id === "number") {
+        chrome.tabs.update(sender.tab.id, { active: true }).catch(() => {});
+      }
+      if (typeof sender.tab.windowId === "number") {
+        chrome.windows.update(sender.tab.windowId, { focused: true }).catch(() => {});
+      }
+    }
+    sendJson({ type: "trigger_fullscreen_key" });
     sendResponse({ ok: true });
     return false;
   }

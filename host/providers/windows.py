@@ -553,3 +553,35 @@ class WindowsProvider:
             return True
 
         return await asyncio.to_thread(_press)
+
+
+def send_fullscreen_key() -> bool:
+    """Send 'F' key (VK_F 0x46) to toggle video player fullscreen with trusted OS event."""
+    try:
+        user32 = getattr(ctypes, "windll", None)
+        if user32 is None or not hasattr(user32, "user32"):
+            return False
+        u32 = user32.user32
+        scan = u32.MapVirtualKeyW(0x46, 0) or 0x21
+        u32.keybd_event(0x46, scan, 0, 0)
+        time.sleep(0.02)
+        u32.keybd_event(0x46, scan, KEYEVENTF_KEYUP, 0)
+        return True
+    except Exception:
+        return False
+
+
+def focus_chrome_window() -> bool:
+    """Ensure Google Chrome top-level window is in the foreground if present."""
+    try:
+        user32 = getattr(ctypes, "windll", None)
+        if user32 is None or not hasattr(user32, "user32"):
+            return False
+        hwnd = user32.user32.FindWindowW("Chrome_WidgetWin_1", None)
+        if hwnd:
+            user32.user32.SetForegroundWindow(hwnd)
+            return True
+    except Exception:
+        pass
+    return False
+

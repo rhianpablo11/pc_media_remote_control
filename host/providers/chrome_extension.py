@@ -13,6 +13,7 @@ from host.providers.base import (
     MediaStatus,
     PlaybackControls,
 )
+from host.providers.windows import focus_chrome_window, send_fullscreen_key
 
 
 class ExtensionTransport(Protocol):
@@ -148,6 +149,12 @@ class ChromeExtensionProvider:
                 s_future.set_result((ok, results, str(reason) if reason is not None else None))
             return
 
+        if msg_type == "trigger_fullscreen_key":
+            await asyncio.sleep(0.08)
+            focus_chrome_window()
+            send_fullscreen_key()
+            return
+
         if msg_type == "ping" and self._transport is not None:
             await self._transport.send_json(
                 {
@@ -212,6 +219,15 @@ class ChromeExtensionProvider:
             payload["value"] = value
 
         ok, reason = await self._send_request(payload)
+        if reason == "trigger_fullscreen_key" or (
+            action in ("toggle_fullscreen", "fullscreen")
+            and reason in ("trigger_fullscreen_key", "user_activation_needed")
+        ):
+            await asyncio.sleep(0.08)
+            focus_chrome_window()
+            send_fullscreen_key()
+            return True, "entered_fullscreen_via_key"
+
         if ok:
             return True, reason
 
