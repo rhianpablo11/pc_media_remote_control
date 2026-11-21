@@ -774,30 +774,43 @@
     }
 
     if (message.type === "ensure_playback") {
-      const mediaEl = collectMediaElements();
-      if (mediaEl && mediaEl.paused) {
-        mediaEl.play().catch(() => {});
-      }
-      if (message.fullscreen && !document.fullscreenElement) {
-        if (
-          document.activeElement &&
-          (document.activeElement.tagName === "INPUT" ||
-            document.activeElement.tagName === "TEXTAREA" ||
-            document.activeElement.isContentEditable)
-        ) {
-          document.activeElement.blur();
-        }
+      const attemptEnsure = (attempt = 0) => {
+        const mediaEl = collectMediaElements();
         const player = document.querySelector("#movie_player, .html5-video-player");
-        if (player && typeof player.focus === "function") {
-          player.focus();
+
+        if (!mediaEl && !player && attempt < 4) {
+          setTimeout(() => attemptEnsure(attempt + 1), 350);
+          return;
         }
-        try {
-          chrome.runtime.sendMessage({ type: "request_fullscreen_key" }, () => {
-            void chrome.runtime.lastError;
-          });
-        } catch {}
-      }
-      setTimeout(() => sendSnapshot(true), 300);
+
+        if (mediaEl && mediaEl.paused) {
+          mediaEl.play().catch(() => {});
+        }
+        if (message.fullscreen && !document.fullscreenElement) {
+          if (
+            document.activeElement &&
+            (document.activeElement.tagName === "INPUT" ||
+              document.activeElement.tagName === "TEXTAREA" ||
+              document.activeElement.isContentEditable)
+          ) {
+            document.activeElement.blur();
+          }
+          if (player && typeof player.focus === "function") {
+            player.focus();
+          }
+          try {
+            chrome.runtime.sendMessage(
+              { type: "request_fullscreen_key", title: document.title || "" },
+              () => {
+                void chrome.runtime.lastError;
+              }
+            );
+          } catch {}
+        }
+        setTimeout(() => sendSnapshot(true), 300);
+      };
+
+      attemptEnsure(0);
       sendResponse({ ok: true });
       return false;
     }

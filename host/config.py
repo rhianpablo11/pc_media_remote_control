@@ -50,6 +50,14 @@ def get_installed_extension_dir() -> Path:
     return ext_dir
 
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def sync_installed_extension() -> Path:
     """Ensure the Chrome extension in %LOCALAPPDATA%\\PCMediaControl\\extension is up to date."""
     target_dir = get_installed_extension_dir()
@@ -73,6 +81,22 @@ def sync_installed_extension() -> Path:
                 should_sync = True
         except Exception:
             should_sync = True
+
+    if not should_sync:
+        for item in source_dir.iterdir():
+            if not item.is_file():
+                continue
+            target_file = target_dir / item.name
+            if not target_file.is_file():
+                should_sync = True
+                break
+            try:
+                if _file_sha256(item) != _file_sha256(target_file):
+                    should_sync = True
+                    break
+            except Exception:
+                should_sync = True
+                break
 
     if should_sync:
         for item in source_dir.iterdir():

@@ -338,9 +338,28 @@ async def test_coordinator_toggle_fullscreen_and_play_video() -> None:
 
 @pytest.mark.anyio
 async def test_chrome_extension_provider_trigger_fullscreen_key() -> None:
-    chrome = ChromeExtensionProvider()
+    triggered_titles: list[str | None] = []
+
+    async def fake_fullscreen_handler(preferred_title: str | None) -> bool:
+        triggered_titles.append(preferred_title)
+        return True
+
+    chrome = ChromeExtensionProvider(fullscreen_key_handler=fake_fullscreen_handler)
     transport = FakeExtensionTransport()
     chrome.attach(transport)
+    await chrome.handle_message(
+        {
+            "type": "extension_state",
+            "tabs": [
+                {
+                    "tabId": 42,
+                    "title": "Synthwave Radio Stream",
+                    "status": "PLAYING",
+                    "isFullscreen": False,
+                }
+            ],
+        }
+    )
 
     async def reply_fullscreen_trigger(req_id: str) -> None:
         await asyncio.sleep(0.01)
@@ -369,6 +388,7 @@ async def test_chrome_extension_provider_trigger_fullscreen_key() -> None:
         )
         assert ok is True
         assert reason == "entered_fullscreen_via_key"
+        assert triggered_titles == ["Synthwave Radio Stream"]
     finally:
         worker.cancel()
 

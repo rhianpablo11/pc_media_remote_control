@@ -182,6 +182,31 @@ def test_extension_sync_to_appdata() -> None:
     assert "Modo do desenvolvedor" in readme_content
 
 
+def test_extension_sync_detects_file_hash_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ensure sync_installed_extension re-syncs when a file changes even without version bump."""
+    from host import config as host_config
+
+    src_root = tmp_path / "src"
+    ext_src = src_root / "extension"
+    ext_src.mkdir(parents=True)
+    (ext_src / "manifest.json").write_text('{"version": "0.2.0"}', encoding="utf-8")
+    (ext_src / "content.js").write_text("// updated content", encoding="utf-8")
+
+    tgt_ext = tmp_path / "appdata" / "extension"
+    tgt_ext.mkdir(parents=True)
+    (tgt_ext / "manifest.json").write_text('{"version": "0.2.0"}', encoding="utf-8")
+    (tgt_ext / "content.js").write_text("// stale content", encoding="utf-8")
+
+    monkeypatch.setattr(host_config, "get_base_dir", lambda: src_root)
+    monkeypatch.setattr(host_config, "get_installed_extension_dir", lambda: tgt_ext)
+
+    host_config.sync_installed_extension()
+    assert (tgt_ext / "content.js").read_text(encoding="utf-8") == "// updated content"
+    assert (tgt_ext / "LEIA-ME.txt").is_file()
+
+
 def test_autostart_helpers_and_status() -> None:
     """Ensure parse_executable_from_command and autostart status behave deterministically."""
     from host.autostart import (

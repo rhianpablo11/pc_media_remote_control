@@ -228,7 +228,27 @@ async function handleHostCommand(msg) {
   }
 
   if (response && response.ok) {
+    if (response.reason === "exited_fullscreen" && typeof tab.windowId === "number") {
+      try {
+        const win = await chrome.windows.get(tab.windowId).catch(() => null);
+        if (win && win.state === "fullscreen") {
+          await chrome.windows.update(tab.windowId, { state: "normal", focused: true }).catch(() => {});
+        }
+      } catch {}
+    }
     sendAck(msg.requestId, true, response.reason);
+  } else if (msg.action === "fullscreen" && !msg.value) {
+    try {
+      if (typeof tab.windowId === "number") {
+        const win = await chrome.windows.get(tab.windowId).catch(() => null);
+        if (win && win.state === "fullscreen") {
+          await chrome.windows.update(tab.windowId, { state: "normal", focused: true }).catch(() => {});
+          sendAck(msg.requestId, true, "window_normal");
+          return;
+        }
+      }
+    } catch {}
+    sendAck(msg.requestId, false, response?.reason || "exit_fullscreen_failed");
   } else if (
     msg.action === "toggle_fullscreen" ||
     msg.action === "fullscreen"
@@ -238,12 +258,7 @@ async function handleHostCommand(msg) {
         await chrome.tabs.update(tab.id, { active: true }).catch(() => {});
       }
       if (typeof tab.windowId === "number") {
-        const win = await chrome.windows.get(tab.windowId).catch(() => null);
-        if (win && win.state === "fullscreen" && response?.reason === "exited_fullscreen") {
-          await chrome.windows.update(tab.windowId, { state: "normal", focused: true }).catch(() => {});
-        } else {
-          await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
-        }
+        await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
       }
     } catch {}
     sendAck(msg.requestId, true, "trigger_fullscreen_key");
@@ -632,15 +647,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "request_fullscreen_key") {
-    if (sender && sender.tab) {
-      if (typeof sender.tab.id === "number") {
-        chrome.tabs.update(sender.tab.id, { active: true }).catch(() => {});
-      }
-      if (typeof sender.tab.windowId === "number") {
-        chrome.windows.update(sender.tab.windowId, { focused: true }).catch(() => {});
-      }
-    }
-    sendJson({ type: "trigger_fullscreen_key" });
+    void (async () => {
+      try {
+        if (sender && sender.tab) {
+          if (typeof sender.tab.id === "number") {
+            await chrome.tabs.update(sender.tab.id, { active: true }).catch(() => {});
+          }
+          if (typeof sender.tab.windowId === "number") {
+            await chrome.windows.update(sender.tab.windowId, { focused: true }).catch(() => {});
+          }
+        }
+      } catch {}
+      sendJson({
+        type: "trigger_fullscreen_key",
+        title: message.title || sender?.tab?.title || "",
+      });
+    })();
     sendResponse({ ok: true });
     return false;
   }

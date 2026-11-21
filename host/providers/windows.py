@@ -7,10 +7,14 @@ import ctypes
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from ctypes import wintypes
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import psutil
+
+from host.input_control import send_vk_press
 from host.providers.base import (
     AudioAppInfo,
     MasterVolumeInfo,
@@ -556,32 +560,68 @@ class WindowsProvider:
 
 
 def send_fullscreen_key() -> bool:
-    """Send 'F' key (VK_F 0x46) to toggle video player fullscreen with trusted OS event."""
+    """Send 'F' key (VK_F 0x46) via SendInput to toggle video player fullscreen."""
+    return send_vk_press(0x46, extended=False)
+
+
+def _get_hwnd_process_name(u32: Any, hwnd: Any) -> str:
+    pid = wintypes.DWORD()
     try:
-        user32 = getattr(ctypes, "windll", None)
-        if user32 is None or not hasattr(user32, "user32"):
+        u32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if not pid.value:
+            return ""
+        return psutil.Process(pid.value).name().lower()
+    except Exception:
+        return ""
+
+
+def focus_chrome_window(preferred_title: str | None = None) -> bool:
+    """Ensure a visible chrome.exe window is in the foreground without stealing to Electron."""
+    try:
+        windll = getattr(ctypes, "windll", None)
+        if windll is None or not hasattr(windll, "user32"):
             return False
-        u32 = user32.user32
-        scan = u32.MapVirtualKeyW(0x46, 0) or 0x21
-        u32.keybd_event(0x46, scan, 0, 0)
-        time.sleep(0.02)
-        u32.keybd_event(0x46, scan, KEYEVENTF_KEYUP, 0)
+        u32 = windll.user32
+
+        fg_hwnd = u32.GetForegroundWindow()
+        if fg_hwnd and _get_hwnd_process_name(u32, fg_hwnd) == "chrome.exe":
+            return True
+
+        matches: list[tuple[int, str]] = []
+        enum_proc_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        cls_buf = ctypes.create_unicode_buffer(256)
+        title_buf = ctypes.create_unicode_buffer(512)
+
+        def _enum_cb(hwnd: Any, _lparam: Any) -> bool:
+            if not u32.IsWindowVisible(hwnd):
+                return True
+            u32.GetClassNameW(hwnd, cls_buf, 256)
+            if cls_buf.value != "Chrome_WidgetWin_1":
+                return True
+            u32.GetWindowTextW(hwnd, title_buf, 512)
+            title = title_buf.value.strip()
+            if not title:
+                return True
+            if _get_hwnd_process_name(u32, hwnd) == "chrome.exe":
+                matches.append((int(hwnd), title))
+            return True
+
+        u32.EnumWindows(enum_proc_type(_enum_cb), 0)
+        if not matches:
+            return False
+
+        chosen_hwnd = matches[0][0]
+        if preferred_title and preferred_title.strip():
+            needle = preferred_title.strip()[:25].lower()
+            for hwnd, title in matches:
+                if needle in title.lower():
+                    chosen_hwnd = hwnd
+                    break
+
+        if u32.IsIconic(chosen_hwnd):
+            u32.ShowWindow(chosen_hwnd, 9)  # SW_RESTORE
+        u32.SetForegroundWindow(chosen_hwnd)
         return True
     except Exception:
         return False
-
-
-def focus_chrome_window() -> bool:
-    """Ensure Google Chrome top-level window is in the foreground if present."""
-    try:
-        user32 = getattr(ctypes, "windll", None)
-        if user32 is None or not hasattr(user32, "user32"):
-            return False
-        hwnd = user32.user32.FindWindowW("Chrome_WidgetWin_1", None)
-        if hwnd:
-            user32.user32.SetForegroundWindow(hwnd)
-            return True
-    except Exception:
-        pass
-    return False
 

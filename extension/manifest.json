@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "PC Media Control — Ponte Chrome",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Ponte local entre abas com mídia do Google Chrome e o servidor PC Media Control.",
   "minimum_chrome_version": "116",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAziPQ4qzN6IIivGrVZVbiewbNDQ8cUaW1gkkH8R8JzkXATtsf/rbvGL1PG8L0/NfDmciDK4KaaW5jvwZBb+cD/Qs+80psfe+3r6UPBgb13AINdQYyfjr9WnQAablj0oe/RR+m5MOy7v+kuiHtNbbJimFcs1CtqPO8NcitZZs5vkc8r5ryT17NsxxK5ap2uuAlhnvYzqtMG7II+iBnRctZx1+245RZEiLljYzRG/LHV+9lGCcqRHLkrCDzhZeMJjYziQ8SeLDBa1qsIeACPJCu2hVbV1cpB/qc+hbIjRP5mEa3gQq08BkDFLxbK7rJUXa9sFML3GDVGSfv7+GAf+1L7QIDAQAB",

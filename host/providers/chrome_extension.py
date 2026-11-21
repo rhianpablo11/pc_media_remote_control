@@ -70,10 +70,24 @@ def parse_chrome_tab_session(raw_tab: dict[str, Any]) -> MediaSessionInfo:
     )
 
 
+def _focus_and_press_f(preferred_title: str | None) -> bool:
+    focus_chrome_window(preferred_title)
+    return send_fullscreen_key()
+
+
+async def _default_fullscreen_key_handler(preferred_title: str | None) -> bool:
+    await asyncio.sleep(0.08)
+    return await asyncio.to_thread(_focus_and_press_f, preferred_title)
+
+
 class ChromeExtensionProvider:
     """SessionProvider backed by a connected Chrome MV3 extension over localhost WebSocket."""
 
-    def __init__(self, command_timeout_sec: float = 2.0) -> None:
+    def __init__(
+        self,
+        command_timeout_sec: float = 2.0,
+        fullscreen_key_handler: Callable[[str | None], Awaitable[bool]] | None = None,
+    ) -> None:
         self._transport: ExtensionTransport | None = None
         self._sessions: list[MediaSessionInfo] = []
         self._pending: dict[str, asyncio.Future[tuple[bool, str | None]]] = {}
@@ -82,6 +96,7 @@ class ChromeExtensionProvider:
         ] = {}
         self._command_timeout_sec = command_timeout_sec
         self._on_change: Callable[[], Awaitable[None]] | None = None
+        self._fullscreen_key_handler = fullscreen_key_handler or _default_fullscreen_key_handler
 
     @property
     def source(self) -> str:
@@ -150,9 +165,9 @@ class ChromeExtensionProvider:
             return
 
         if msg_type == "trigger_fullscreen_key":
-            await asyncio.sleep(0.08)
-            focus_chrome_window()
-            send_fullscreen_key()
+            raw_title = payload.get("title")
+            preferred = str(raw_title) if isinstance(raw_title, str) and raw_title else None
+            await self._fullscreen_key_handler(preferred)
             return
 
         if msg_type == "ping" and self._transport is not None:
@@ -223,10 +238,9 @@ class ChromeExtensionProvider:
             action in ("toggle_fullscreen", "fullscreen")
             and reason in ("trigger_fullscreen_key", "user_activation_needed")
         ):
-            await asyncio.sleep(0.08)
-            focus_chrome_window()
-            send_fullscreen_key()
-            return True, "entered_fullscreen_via_key"
+            preferred_title = target_session.title if target_session else None
+            key_ok = await self._fullscreen_key_handler(preferred_title)
+            return key_ok, ("entered_fullscreen_via_key" if key_ok else "fullscreen_key_failed")
 
         if ok:
             return True, reason
