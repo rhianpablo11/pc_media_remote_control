@@ -58,10 +58,14 @@ class SystemTrayApp:
         settings: HostSettings,
         pairing_manager: PairingManager | None = None,
         on_exit: Callable[[], Any] | None = None,
+        get_remote_input_enabled: Callable[[], bool] | None = None,
+        on_toggle_remote_input: Callable[[bool], Any] | None = None,
     ) -> None:
         self.settings = settings
         self.pairing_manager = pairing_manager
         self.on_exit_callback = on_exit
+        self._get_remote_input_enabled = get_remote_input_enabled
+        self._on_toggle_remote_input = on_toggle_remote_input
         self._icon: Any = None
 
     def _open_url(self, path: str = "/") -> None:
@@ -95,6 +99,22 @@ class SystemTrayApp:
     def _toggle_autostart(self, _icon: Any, _item: Any) -> None:
         status = get_autostart_status()
         set_autostart(not status.is_enabled)
+
+    def _is_remote_input_enabled(self) -> bool:
+        if self._get_remote_input_enabled is None:
+            return False
+        try:
+            return bool(self._get_remote_input_enabled())
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _toggle_remote_input(self, _icon: Any, _item: Any) -> None:
+        if self._on_toggle_remote_input is None:
+            return
+        try:
+            self._on_toggle_remote_input(not self._is_remote_input_enabled())
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Erro ao alternar mouse/teclado remoto na bandeja: %s", exc)
 
     def _on_exit_clicked(self, _icon: Any, _item: Any) -> None:
         logger.info("Encerramento solicitado pelo menu da bandeja.")
@@ -156,6 +176,12 @@ class SystemTrayApp:
             pystray.MenuItem("🎵 Abrir Central de Mídia", lambda _i, _m: self._open_url("/")),
             pystray.MenuItem("🔒 Dispositivos Pareados", self._get_devices_submenu()),
             pystray.Menu.SEPARATOR,
+            pystray.MenuItem(
+                "🖱️ Mouse e Teclado Remoto",
+                self._toggle_remote_input,
+                checked=lambda _item: self._is_remote_input_enabled(),
+                enabled=self._on_toggle_remote_input is not None,
+            ),
             pystray.MenuItem(
                 self._get_autostart_label(),
                 self._toggle_autostart,

@@ -27,6 +27,7 @@ MediaAction = Literal[
     "toggle_fullscreen",
     "fullscreen",
 ]
+MouseButton = Literal["left", "right", "middle"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,4 +155,32 @@ class AudioControlProvider(Protocol):
 
     async def send_media_key(self, action: MediaAction) -> bool:
         """Send a global OS media key as fallback for apps without GSMTC (e.g. VLC 3.x)."""
+        ...
+
+
+class RemoteInputProvider(Protocol):
+    """Contract for OS-level remote touchpad/mouse and keyboard automation."""
+
+    async def move_mouse(self, dx: int, dy: int) -> bool:
+        """Move pointer cursor by relative pixel deltas."""
+        ...
+
+    async def click_mouse(self, button: MouseButton, double: bool = False) -> bool:
+        """Click (or double-click) a mouse button."""
+        ...
+
+    async def mouse_button(self, button: MouseButton, state: Literal["down", "up"]) -> bool:
+        """Hold or release a mouse button for drag gestures."""
+        ...
+
+    async def scroll_mouse(self, dx: int, dy: int) -> bool:
+        """Scroll vertically and/or horizontally."""
+        ...
+
+    async def type_text(self, text: str) -> bool:
+        """Type Unicode text into the active window."""
+        ...
+
+    async def press_key(self, key: str, modifiers: list[str] | None = None) -> bool:
+        """Press an allowed special/shortcut key with optional modifiers."""
         ...

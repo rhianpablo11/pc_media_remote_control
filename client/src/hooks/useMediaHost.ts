@@ -4,6 +4,7 @@ import type {
   ConnectionStatus,
   DiagnosticInfo,
   ErrorMessage,
+  InputMessagePayload,
   MediaAction,
   PairedDevicePublic,
   SearchMessage,
@@ -42,6 +43,8 @@ export interface UseMediaHostResult {
     videoId: string,
     opts?: { mode?: "current_tab" | "new_tab"; fullscreen?: boolean; sessionId?: string },
   ) => boolean;
+  sendInput: (payload: InputMessagePayload, opts?: { expectAck?: boolean }) => boolean;
+  setRemoteInputEnabled: (enabled: boolean) => boolean;
   reconnectNow: () => void;
   pairWithPin: (pin: string) => Promise<{ ok: boolean; error?: string }>;
   pairedDevices: PairedDevicePublic[];
@@ -677,6 +680,41 @@ export function useMediaHost(): UseMediaHostResult {
     [sendPayload],
   );
 
+  const sendInput = useCallback(
+    (payload: InputMessagePayload, opts?: { expectAck?: boolean }): boolean => {
+      if (opts?.expectAck === false) {
+        const socket = wsRef.current;
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+          return false;
+        }
+        socket.send(
+          JSON.stringify({
+            v: 1,
+            type: "input",
+            ...payload,
+          }),
+        );
+        return true;
+      }
+      return sendPayload({
+        type: "input",
+        ...payload,
+      });
+    },
+    [sendPayload],
+  );
+
+  const setRemoteInputEnabled = useCallback(
+    (enabled: boolean): boolean => {
+      triggerHaptic(10);
+      return sendPayload({
+        type: "settings",
+        remoteInputEnabled: enabled,
+      });
+    },
+    [sendPayload],
+  );
+
   return {
     state,
     isCachedState,
@@ -690,6 +728,8 @@ export function useMediaHost(): UseMediaHostResult {
     sendOpen,
     searchYouTube,
     playVideo,
+    sendInput,
+    setRemoteInputEnabled,
     reconnectNow,
     pairWithPin,
     pairedDevices,

@@ -50,6 +50,7 @@ hiddenimports = [
     "host.state",
     "host.app",
     "host.config",
+    "host.input_control",
     "host.providers.base",
     "host.providers.windows",
     "host.providers.chrome_extension",

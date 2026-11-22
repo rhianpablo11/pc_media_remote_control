@@ -1,0 +1,909 @@
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+  type PointerEvent,
+  type TouchEvent,
+} from "react";
+import type { InputMessagePayload, ModifierKey } from "../types";
+import { triggerHaptic } from "../utils";
+import {
+  ArrowDownIcon,
+  ArrowLeftIcon,
+  ArrowRightIcon,
+  ArrowUpIcon,
+  BackspaceIcon,
+  EnterKeyIcon,
+  KeyboardIcon,
+  LockIcon,
+} from "./Icons";
+
+interface RemoteInputViewProps {
+  remoteInputEnabled: boolean;
+  onSendInput: (payload: InputMessagePayload, opts?: { expectAck?: boolean }) => boolean;
+  onSetRemoteInputEnabled: (enabled: boolean) => boolean;
+  onOpenSettings?: () => void;
+}
+
+type SensitivityOption = 0.9 | 1.5 | 2.2;
+type KeyboardMode = "batch" | "live";
+
+const SENSITIVITY_KEY = "pc_media_touchpad_sensitivity";
+const SENSITIVITY_OPTIONS: { value: SensitivityOption; label: string }[] = [
+  { value: 0.9, label: "0.9x" },
+  { value: 1.5, label: "1.5x" },
+  { value: 2.2, label: "2.2x" },
+];
+
+function loadSensitivity(): SensitivityOption {
+  try {
+    const raw = Number(localStorage.getItem(SENSITIVITY_KEY));
+    if (raw === 0.9 || raw === 1.5 || raw === 2.2) return raw;
+  } catch {
+    // Ignore storage unavailability
+  }
+  return 1.5;
+}
+
+function clampDelta(val: number, limit: number): number {
+  return Math.max(-limit, Math.min(limit, val));
+}
+
+export function RemoteInputView({
+  remoteInputEnabled,
+  onSendInput,
+  onSetRemoteInputEnabled,
+  onOpenSettings,
+}: RemoteInputViewProps) {
+  const [sensitivity, setSensitivity] = useState<SensitivityOption>(() => loadSensitivity());
+  const [dragLocked, setDragLocked] = useState(false);
+  const [keyboardMode, setKeyboardMode] = useState<KeyboardMode>("batch");
+  const [batchText, setBatchText] = useState("");
+  const [liveText, setLiveText] = useState("");
+
+  const dragLockedRef = useRef(false);
+  const pendingMoveRef = useRef({ dx: 0, dy: 0 });
+  const pendingScrollRef = useRef({ dx: 0, dy: 0 });
+  const rafIdRef = useRef<number | null>(null);
+
+  const touchActiveRef = useRef(false);
+  const padGestureRef = useRef({
+    active: false,
+    fingerCount: 0,
+    maxFingers: 0,
+    lastX: 0,
+    lastY: 0,
+    twoCenterX: 0,
+    twoCenterY: 0,
+    travelPx: 0,
+    startedAt: 0,
+    lastTapAt: 0,
+    ignoreSingleMoveAfterMulti: false,
+  });
+  const scrollStripRef = useRef({ active: false, lastY: 0 });
+  const livePrevRef = useRef("");
+  const liveComposingRef = useRef(false);
+
+  const flushMotion = useCallback(() => {
+    rafIdRef.current = null;
+    const moveDx = Math.trunc(pendingMoveRef.current.dx);
+    const moveDy = Math.trunc(pendingMoveRef.current.dy);
+    if (moveDx !== 0 || moveDy !== 0) {
+      pendingMoveRef.current.dx -= moveDx;
+      pendingMoveRef.current.dy -= moveDy;
+      onSendInput(
+        {
+          action: "mouse_move",
+          dx: clampDelta(moveDx, 500),
+          dy: clampDelta(moveDy, 500),
+        },
+        { expectAck: false },
+      );
+    }
+
+    const scrollDx = Math.trunc(pendingScrollRef.current.dx);
+    const scrollDy = Math.trunc(pendingScrollRef.current.dy);
+    if (scrollDx !== 0 || scrollDy !== 0) {
+      pendingScrollRef.current.dx -= scrollDx;
+      pendingScrollRef.current.dy -= scrollDy;
+      onSendInput(
+        {
+          action: "mouse_scroll",
+          dx: clampDelta(scrollDx, 1200),
+          dy: clampDelta(scrollDy, 1200),
+        },
+        { expectAck: false },
+      );
+    }
+  }, [onSendInput]);
+
+  const scheduleMotionFlush = useCallback(() => {
+    if (rafIdRef.current !== null) return;
+    rafIdRef.current = window.requestAnimationFrame(flushMotion);
+  }, [flushMotion]);
+
+  const handleSensitivityChange = (next: SensitivityOption) => {
+    setSensitivity(next);
+    try {
+      localStorage.setItem(SENSITIVITY_KEY, String(next));
+    } catch {
+      // Ignore storage error
+    }
+  };
+
+  // Auto-release held left mouse button when disabled or unmounted
+  useEffect(() => {
+    if (!remoteInputEnabled && dragLockedRef.current) {
+      dragLockedRef.current = false;
+      setDragLocked(false);
+      onSendInput({ action: "mouse_up", button: "left" });
+    }
+  }, [remoteInputEnabled, onSendInput]);
+
+  useEffect(() => {
+    return () => {
+      if (rafIdRef.current !== null) {
+        window.cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
+      if (dragLockedRef.current) {
+        dragLockedRef.current = false;
+        onSendInput({ action: "mouse_up", button: "left" });
+      }
+    };
+  }, [onSendInput]);
+
+  const queuePointerMove = (rawDx: number, rawDy: number) => {
+    const dist = Math.hypot(rawDx, rawDy);
+    const accel = dist > 14 ? 1.35 : 1.0;
+    pendingMoveRef.current.dx += rawDx * sensitivity * accel;
+    pendingMoveRef.current.dy += rawDy * sensitivity * accel;
+    scheduleMotionFlush();
+  };
+
+  const queuePointerScroll = (rawDx: number, rawDy: number) => {
+    pendingScrollRef.current.dx += rawDx * 4;
+    pendingScrollRef.current.dy += rawDy * 5;
+    scheduleMotionFlush();
+  };
+
+  const emitTapClick = (button: "left" | "right") => {
+    const now = Date.now();
+    const g = padGestureRef.current;
+    if (button === "left") {
+      const isDouble = g.lastTapAt > 0 && now - g.lastTapAt < 280;
+      g.lastTapAt = isDouble ? 0 : now;
+      triggerHaptic(8);
+      onSendInput({ action: "mouse_click", button: "left", double: isDouble });
+      return;
+    }
+    triggerHaptic(12);
+    onSendInput({ action: "mouse_click", button: "right" });
+  };
+
+  // Touch handlers for Trackpad surface
+  const onPadTouchStart = (e: TouchEvent<HTMLDivElement>) => {
+    if (!remoteInputEnabled) return;
+    touchActiveRef.current = true;
+    const g = padGestureRef.current;
+    const touches = e.touches;
+    g.fingerCount = touches.length;
+    g.maxFingers = Math.max(g.active ? g.maxFingers : 0, touches.length);
+
+    if (!g.active) {
+      g.active = true;
+      g.travelPx = 0;
+      g.startedAt = Date.now();
+      g.ignoreSingleMoveAfterMulti = false;
+    }
+
+    if (touches.length === 1) {
+      g.lastX = touches[0].clientX;
+      g.lastY = touches[0].clientY;
+    } else if (touches.length >= 2) {
+      g.ignoreSingleMoveAfterMulti = true;
+      g.twoCenterX = (touches[0].clientX + touches[1].clientX) / 2;
+      g.twoCenterY = (touches[0].clientY + touches[1].clientY) / 2;
+    }
+  };
+
+  const onPadTouchMove = (e: TouchEvent<HTMLDivElement>) => {
+    const g = padGestureRef.current;
+    if (!remoteInputEnabled || !g.active) return;
+    const touches = e.touches;
+
+    if (touches.length >= 2) {
+      const cx = (touches[0].clientX + touches[1].clientX) / 2;
+      const cy = (touches[0].clientY + touches[1].clientY) / 2;
+      const dx = cx - g.twoCenterX;
+      const dy = cy - g.twoCenterY;
+      g.twoCenterX = cx;
+      g.twoCenterY = cy;
+      g.travelPx += Math.hypot(dx, dy);
+      queuePointerScroll(dx, dy);
+      return;
+    }
+
+    if (touches.length === 1 && !g.ignoreSingleMoveAfterMulti) {
+      const dx = touches[0].clientX - g.lastX;
+      const dy = touches[0].clientY - g.lastY;
+      g.lastX = touches[0].clientX;
+      g.lastY = touches[0].clientY;
+      g.travelPx += Math.hypot(dx, dy);
+      queuePointerMove(dx, dy);
+    }
+  };
+
+  const onPadTouchEnd = (e: TouchEvent<HTMLDivElement>) => {
+    const g = padGestureRef.current;
+    if (!g.active) return;
+
+    if (e.touches.length === 1) {
+      g.lastX = e.touches[0].clientX;
+      g.lastY = e.touches[0].clientY;
+      g.fingerCount = 1;
+      return;
+    }
+
+    if (e.touches.length === 0) {
+      if (rafIdRef.current !== null) {
+        window.cancelAnimationFrame(rafIdRef.current);
+      }
+      flushMotion();
+
+      const elapsed = Date.now() - g.startedAt;
+      if (g.maxFingers === 2 && g.travelPx < 12 && elapsed < 260) {
+        emitTapClick("right");
+      } else if (g.maxFingers === 1 && g.travelPx < 8 && elapsed < 240) {
+        emitTapClick("left");
+      }
+
+      g.active = false;
+      g.fingerCount = 0;
+      g.maxFingers = 0;
+      g.ignoreSingleMoveAfterMulti = false;
+      window.setTimeout(() => {
+        touchActiveRef.current = false;
+      }, 60);
+    }
+  };
+
+  // Pointer fallback for mouse/pen or single-pointer environments
+  const onPadPointerDown = (e: PointerEvent<HTMLDivElement>) => {
+    if (!remoteInputEnabled || e.pointerType === "touch" || touchActiveRef.current) return;
+    const g = padGestureRef.current;
+    g.active = true;
+    g.fingerCount = 1;
+    g.maxFingers = 1;
+    g.lastX = e.clientX;
+    g.lastY = e.clientY;
+    g.travelPx = 0;
+    g.startedAt = Date.now();
+    g.ignoreSingleMoveAfterMulti = false;
+  };
+
+  const onPadPointerMove = (e: PointerEvent<HTMLDivElement>) => {
+    const g = padGestureRef.current;
+    if (!remoteInputEnabled || !g.active || e.pointerType === "touch" || touchActiveRef.current) {
+      return;
+    }
+    const dx = e.clientX - g.lastX;
+    const dy = e.clientY - g.lastY;
+    g.lastX = e.clientX;
+    g.lastY = e.clientY;
+    g.travelPx += Math.hypot(dx, dy);
+    queuePointerMove(dx, dy);
+  };
+
+  const onPadPointerUp = (e: PointerEvent<HTMLDivElement>) => {
+    const g = padGestureRef.current;
+    if (!g.active || e.pointerType === "touch" || touchActiveRef.current) return;
+    if (rafIdRef.current !== null) {
+      window.cancelAnimationFrame(rafIdRef.current);
+    }
+    flushMotion();
+    const elapsed = Date.now() - g.startedAt;
+    if (g.travelPx < 8 && elapsed < 240) {
+      emitTapClick("left");
+    }
+    g.active = false;
+    g.fingerCount = 0;
+    g.maxFingers = 0;
+  };
+
+  // Scroll strip handlers
+  const onScrollTouchStart = (e: TouchEvent<HTMLDivElement>) => {
+    if (!remoteInputEnabled || e.touches.length === 0) return;
+    touchActiveRef.current = true;
+    scrollStripRef.current = { active: true, lastY: e.touches[0].clientY };
+  };
+
+  const onScrollTouchMove = (e: TouchEvent<HTMLDivElement>) => {
+    if (!remoteInputEnabled || !scrollStripRef.current.active || e.touches.length === 0) return;
+    const y = e.touches[0].clientY;
+    const dy = y - scrollStripRef.current.lastY;
+    scrollStripRef.current.lastY = y;
+    queuePointerScroll(0, dy);
+  };
+
+  const onScrollTouchEnd = (e: TouchEvent<HTMLDivElement>) => {
+    if (e.touches.length === 0) {
+      scrollStripRef.current.active = false;
+      if (rafIdRef.current !== null) {
+        window.cancelAnimationFrame(rafIdRef.current);
+      }
+      flushMotion();
+      window.setTimeout(() => {
+        touchActiveRef.current = false;
+      }, 60);
+    }
+  };
+
+  const onScrollPointerDown = (e: PointerEvent<HTMLDivElement>) => {
+    if (!remoteInputEnabled || e.pointerType === "touch" || touchActiveRef.current) return;
+    scrollStripRef.current = { active: true, lastY: e.clientY };
+  };
+
+  const onScrollPointerMove = (e: PointerEvent<HTMLDivElement>) => {
+    if (!remoteInputEnabled || !scrollStripRef.current.active || e.pointerType === "touch") return;
+    const dy = e.clientY - scrollStripRef.current.lastY;
+    scrollStripRef.current.lastY = e.clientY;
+    queuePointerScroll(0, dy);
+  };
+
+  const onScrollPointerUp = (e: PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType === "touch" || !scrollStripRef.current.active) return;
+    scrollStripRef.current.active = false;
+    if (rafIdRef.current !== null) {
+      window.cancelAnimationFrame(rafIdRef.current);
+    }
+    flushMotion();
+  };
+
+  const toggleDragHold = () => {
+    triggerHaptic(10);
+    const next = !dragLocked;
+    dragLockedRef.current = next;
+    setDragLocked(next);
+    onSendInput({ action: next ? "mouse_down" : "mouse_up", button: "left" });
+  };
+
+  const sendSpecialKey = (key: string, modifiers?: ModifierKey[]) => {
+    triggerHaptic(8);
+    onSendInput({ action: "key_press", key, modifiers });
+  };
+
+  const handleBatchSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    if (!batchText) return;
+    triggerHaptic(8);
+    if (onSendInput({ action: "key_text", text: batchText })) {
+      setBatchText("");
+    }
+  };
+
+  const handleBatchSendEnter = () => {
+    triggerHaptic(10);
+    if (batchText) {
+      onSendInput({ action: "key_text", text: batchText });
+      setBatchText("");
+    }
+    onSendInput({ action: "key_press", key: "enter" });
+  };
+
+  const applyLiveDiff = (nextVal: string) => {
+    const prev = livePrevRef.current;
+    if (nextVal === prev) return;
+    if (nextVal.startsWith(prev)) {
+      const added = nextVal.slice(prev.length);
+      if (added) {
+        onSendInput({ action: "key_text", text: added }, { expectAck: false });
+      }
+    } else if (prev.startsWith(nextVal)) {
+      const removed = prev.length - nextVal.length;
+      for (let i = 0; i < removed; i += 1) {
+        onSendInput({ action: "key_press", key: "backspace" }, { expectAck: false });
+      }
+    } else {
+      for (let i = 0; i < prev.length; i += 1) {
+        onSendInput({ action: "key_press", key: "backspace" }, { expectAck: false });
+      }
+      if (nextVal) {
+        onSendInput({ action: "key_text", text: nextVal }, { expectAck: false });
+      }
+    }
+    livePrevRef.current = nextVal;
+  };
+
+  const handleLiveChange = (nextVal: string) => {
+    setLiveText(nextVal);
+    if (!liveComposingRef.current) {
+      applyLiveDiff(nextVal);
+    }
+  };
+
+  const handleLiveKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Backspace" && liveText === "") {
+      e.preventDefault();
+      sendSpecialKey("backspace");
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      sendSpecialKey("enter");
+      setLiveText("");
+      livePrevRef.current = "";
+    }
+  };
+
+  if (!remoteInputEnabled) {
+    return (
+      <div className="flex flex-col gap-4">
+        <section className="card-surface flex flex-col items-center p-6 text-center shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
+          <div
+            className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl"
+            style={{
+              backgroundColor: "var(--surface-elevated)",
+              color: "var(--text-secondary)",
+            }}
+          >
+            <LockIcon className="h-8 w-8" />
+          </div>
+          <h2 className="text-lg font-semibold" style={{ color: "var(--text)" }}>
+            Mouse e teclado desativados
+          </h2>
+          <p className="mt-1.5 max-w-[32ch] text-sm" style={{ color: "var(--text-secondary)" }}>
+            Por segurança, o controle remoto de cursor e teclado começa desligado. Ative abaixo ou
+            no ícone da bandeja do Windows.
+          </p>
+
+          <div className="mt-5 flex w-full flex-col gap-2.5">
+            <button
+              type="button"
+              onClick={() => onSetRemoteInputEnabled(true)}
+              className="touch-btn w-full rounded-2xl px-4 py-3 text-sm font-semibold"
+              style={{
+                backgroundColor: "var(--accent)",
+                color: "var(--accent-contrast)",
+              }}
+            >
+              Ativar Mouse e Teclado
+            </button>
+            {onOpenSettings ? (
+              <button
+                type="button"
+                onClick={onOpenSettings}
+                className="touch-btn w-full rounded-2xl px-4 py-3 text-xs font-semibold"
+                style={{
+                  backgroundColor: "var(--surface-elevated)",
+                  color: "var(--text)",
+                  border: "1px solid var(--separator)",
+                }}
+              >
+                Ir para Configurações
+              </button>
+            ) : null}
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      {/* 1. Touchpad card */}
+      <section className="card-surface p-4 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span
+              className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold"
+              style={{
+                backgroundColor: "var(--surface-elevated)",
+                color: "var(--ok)",
+              }}
+            >
+              <span
+                className="h-2 w-2 rounded-full"
+                style={{ backgroundColor: "var(--ok)" }}
+                aria-hidden="true"
+              />
+              <span>Ativo</span>
+            </span>
+
+            <div
+              className="inline-flex rounded-xl p-0.5"
+              role="group"
+              aria-label="Sensibilidade do touchpad"
+              style={{ backgroundColor: "var(--surface-elevated)" }}
+            >
+              {SENSITIVITY_OPTIONS.map((opt) => {
+                const selected = sensitivity === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => handleSensitivityChange(opt.value)}
+                    className="rounded-lg px-2 py-1 text-[11px] font-semibold"
+                    style={{
+                      backgroundColor: selected ? "var(--surface)" : "transparent",
+                      color: selected ? "var(--accent)" : "var(--text-secondary)",
+                    }}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => onSetRemoteInputEnabled(false)}
+            className="touch-btn rounded-xl px-3 py-1.5 text-xs font-semibold"
+            style={{
+              backgroundColor: "var(--surface-elevated)",
+              color: "var(--danger)",
+            }}
+          >
+            Desativar
+          </button>
+        </div>
+
+        {/* Touchpad + Vertical Scroll Strip */}
+        <div
+          className="flex overflow-hidden rounded-[22px]"
+          style={{
+            backgroundColor: "var(--surface-elevated)",
+            border: "1px solid var(--separator)",
+          }}
+        >
+          <div
+            role="application"
+            aria-label="Área do touchpad"
+            className="touch-none select-none flex min-h-[230px] flex-1 flex-col items-center justify-center p-4 text-center"
+            onTouchStart={onPadTouchStart}
+            onTouchMove={onPadTouchMove}
+            onTouchEnd={onPadTouchEnd}
+            onTouchCancel={onPadTouchEnd}
+            onPointerDown={onPadPointerDown}
+            onPointerMove={onPadPointerMove}
+            onPointerUp={onPadPointerUp}
+            onPointerCancel={onPadPointerUp}
+          >
+            <span className="text-xs font-semibold" style={{ color: "var(--text-secondary)" }}>
+              Arraste com 1 dedo para mover o cursor
+            </span>
+            <span className="mt-1 text-[11px]" style={{ color: "var(--text-secondary)" }}>
+              Toque = clique • 2 dedos = rolar ou toque direito
+            </span>
+          </div>
+
+          <div
+            role="scrollbar"
+            aria-label="Barra de rolagem vertical"
+            aria-orientation="vertical"
+            aria-valuenow={50}
+            className="touch-none select-none flex w-11 shrink-0 flex-col items-center justify-between border-l py-3 text-[10px] font-semibold"
+            style={{
+              borderColor: "var(--separator)",
+              color: "var(--text-secondary)",
+            }}
+            onTouchStart={onScrollTouchStart}
+            onTouchMove={onScrollTouchMove}
+            onTouchEnd={onScrollTouchEnd}
+            onTouchCancel={onScrollTouchEnd}
+            onPointerDown={onScrollPointerDown}
+            onPointerMove={onScrollPointerMove}
+            onPointerUp={onScrollPointerUp}
+            onPointerCancel={onScrollPointerUp}
+          >
+            <span>▲</span>
+            <span className="text-[9px] uppercase tracking-wider [writing-mode:vertical-rl]">
+              Rolar
+            </span>
+            <span>▼</span>
+          </div>
+        </div>
+
+        {/* Mouse Action Buttons */}
+        <div className="mt-3 grid grid-cols-3 gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              triggerHaptic(8);
+              onSendInput({ action: "mouse_click", button: "left" });
+            }}
+            className="touch-btn rounded-2xl px-3 text-xs font-semibold"
+            style={{
+              backgroundColor: "var(--surface-elevated)",
+              color: "var(--text)",
+            }}
+          >
+            Clique Esq.
+          </button>
+
+          <button
+            type="button"
+            aria-pressed={dragLocked}
+            onClick={toggleDragHold}
+            className="touch-btn rounded-2xl px-3 text-xs font-semibold"
+            style={{
+              backgroundColor: dragLocked ? "var(--accent)" : "var(--surface-elevated)",
+              color: dragLocked ? "var(--accent-contrast)" : "var(--text)",
+            }}
+          >
+            {dragLocked ? "Soltar" : "Arrastar"}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              triggerHaptic(10);
+              onSendInput({ action: "mouse_click", button: "right" });
+            }}
+            className="touch-btn rounded-2xl px-3 text-xs font-semibold"
+            style={{
+              backgroundColor: "var(--surface-elevated)",
+              color: "var(--text)",
+            }}
+          >
+            Clique Dir.
+          </button>
+        </div>
+      </section>
+
+      {/* 2. Remote Keyboard card */}
+      <section className="card-surface p-4 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <KeyboardIcon className="h-4 w-4" style={{ color: "var(--accent)" }} />
+            <h2 className="text-base font-semibold" style={{ color: "var(--text)" }}>
+              Teclado Remoto
+            </h2>
+          </div>
+
+          <div
+            className="inline-flex rounded-xl p-0.5"
+            role="radiogroup"
+            aria-label="Modo de digitação"
+            style={{ backgroundColor: "var(--surface-elevated)" }}
+          >
+            <button
+              type="button"
+              role="radio"
+              aria-checked={keyboardMode === "batch"}
+              onClick={() => setKeyboardMode("batch")}
+              className="rounded-lg px-2.5 py-1 text-[11px] font-semibold"
+              style={{
+                backgroundColor: keyboardMode === "batch" ? "var(--surface)" : "transparent",
+                color: keyboardMode === "batch" ? "var(--accent)" : "var(--text-secondary)",
+              }}
+            >
+              Enviar texto
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={keyboardMode === "live"}
+              onClick={() => {
+                setLiveText("");
+                livePrevRef.current = "";
+                setKeyboardMode("live");
+              }}
+              className="rounded-lg px-2.5 py-1 text-[11px] font-semibold"
+              style={{
+                backgroundColor: keyboardMode === "live" ? "var(--surface)" : "transparent",
+                color: keyboardMode === "live" ? "var(--accent)" : "var(--text-secondary)",
+              }}
+            >
+              Tempo real
+            </button>
+          </div>
+        </div>
+
+        {keyboardMode === "batch" ? (
+          <form onSubmit={handleBatchSubmit} className="flex gap-2">
+            <input
+              type="text"
+              value={batchText}
+              onChange={(e) => setBatchText(e.target.value)}
+              placeholder="Digite aqui para enviar ao PC..."
+              aria-label="Digitar texto para o PC"
+              className="min-h-[44px] min-w-0 flex-1 rounded-2xl px-3.5 text-sm outline-none"
+              style={{
+                backgroundColor: "var(--surface-elevated)",
+                color: "var(--text)",
+                border: "1px solid var(--separator)",
+              }}
+            />
+            <button
+              type="submit"
+              disabled={!batchText}
+              className="touch-btn shrink-0 rounded-2xl px-3.5 text-xs font-semibold disabled:opacity-40"
+              style={{
+                backgroundColor: "var(--accent)",
+                color: "var(--accent-contrast)",
+              }}
+            >
+              Enviar
+            </button>
+            <button
+              type="button"
+              onClick={handleBatchSendEnter}
+              aria-label="Enviar texto e apertar Enter"
+              title="Enviar + Enter"
+              className="touch-btn flex shrink-0 items-center justify-center rounded-2xl px-3 text-xs font-semibold"
+              style={{
+                backgroundColor: "var(--surface-elevated)",
+                color: "var(--text)",
+                border: "1px solid var(--separator)",
+              }}
+            >
+              <EnterKeyIcon className="h-4 w-4" />
+            </button>
+          </form>
+        ) : (
+          <div className="flex flex-col gap-1.5">
+            <input
+              type="text"
+              value={liveText}
+              onChange={(e) => handleLiveChange(e.target.value)}
+              onKeyDown={handleLiveKeyDown}
+              onCompositionStart={() => {
+                liveComposingRef.current = true;
+              }}
+              onCompositionEnd={(e) => {
+                liveComposingRef.current = false;
+                applyLiveDiff(e.currentTarget.value);
+              }}
+              placeholder="Digite em tempo real no PC..."
+              aria-label="Digitar texto para o PC"
+              className="min-h-[44px] w-full rounded-2xl px-3.5 text-sm outline-none"
+              style={{
+                backgroundColor: "var(--surface-elevated)",
+                color: "var(--text)",
+                border: "1px solid var(--separator)",
+              }}
+            />
+            <span className="text-[11px]" style={{ color: "var(--text-secondary)" }}>
+              Cada caractere ou Enter é enviado imediatamente ao computador.
+            </span>
+          </div>
+        )}
+
+        {/* Quick Special Keys & Shortcuts */}
+        <div className="mt-3 flex flex-col gap-2">
+          <div className="grid grid-cols-4 gap-2">
+            <button
+              type="button"
+              onClick={() => sendSpecialKey("escape")}
+              className="touch-btn rounded-2xl px-2 text-xs font-semibold"
+              style={{ backgroundColor: "var(--surface-elevated)", color: "var(--text)" }}
+            >
+              Esc
+            </button>
+            <button
+              type="button"
+              onClick={() => sendSpecialKey("tab")}
+              className="touch-btn rounded-2xl px-2 text-xs font-semibold"
+              style={{ backgroundColor: "var(--surface-elevated)", color: "var(--text)" }}
+            >
+              Tab
+            </button>
+            <button
+              type="button"
+              aria-label="Apagar"
+              onClick={() => sendSpecialKey("backspace")}
+              className="touch-btn flex items-center justify-center rounded-2xl px-2 text-xs font-semibold"
+              style={{ backgroundColor: "var(--surface-elevated)", color: "var(--text)" }}
+            >
+              <BackspaceIcon className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              aria-label="Enter"
+              onClick={() => sendSpecialKey("enter")}
+              className="touch-btn flex items-center justify-center gap-1 rounded-2xl px-2 text-xs font-semibold"
+              style={{ backgroundColor: "var(--accent-soft)", color: "var(--accent)" }}
+            >
+              <EnterKeyIcon className="h-4 w-4" />
+              <span>Enter</span>
+            </button>
+          </div>
+
+          <div className="grid grid-cols-5 gap-2">
+            <button
+              type="button"
+              aria-label="Seta esquerda"
+              onClick={() => sendSpecialKey("left")}
+              className="touch-btn flex items-center justify-center rounded-2xl"
+              style={{ backgroundColor: "var(--surface-elevated)", color: "var(--text)" }}
+            >
+              <ArrowLeftIcon className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              aria-label="Seta cima"
+              onClick={() => sendSpecialKey("up")}
+              className="touch-btn flex items-center justify-center rounded-2xl"
+              style={{ backgroundColor: "var(--surface-elevated)", color: "var(--text)" }}
+            >
+              <ArrowUpIcon className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              aria-label="Seta baixo"
+              onClick={() => sendSpecialKey("down")}
+              className="touch-btn flex items-center justify-center rounded-2xl"
+              style={{ backgroundColor: "var(--surface-elevated)", color: "var(--text)" }}
+            >
+              <ArrowDownIcon className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              aria-label="Seta direita"
+              onClick={() => sendSpecialKey("right")}
+              className="touch-btn flex items-center justify-center rounded-2xl"
+              style={{ backgroundColor: "var(--surface-elevated)", color: "var(--text)" }}
+            >
+              <ArrowRightIcon className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => sendSpecialKey("space")}
+              className="touch-btn rounded-2xl px-1 text-[11px] font-semibold"
+              style={{ backgroundColor: "var(--surface-elevated)", color: "var(--text)" }}
+            >
+              Espaço
+            </button>
+          </div>
+
+          <div className="grid grid-cols-5 gap-1.5">
+            <button
+              type="button"
+              onClick={() => sendSpecialKey("tab", ["alt"])}
+              className="touch-btn rounded-xl px-1 text-[11px] font-semibold"
+              style={{ backgroundColor: "var(--surface-elevated)", color: "var(--text)" }}
+            >
+              Alt+Tab
+            </button>
+            <button
+              type="button"
+              onClick={() => sendSpecialKey("f")}
+              aria-label="Tecla F tela cheia"
+              className="touch-btn rounded-xl px-1 text-[11px] font-semibold"
+              style={{ backgroundColor: "var(--surface-elevated)", color: "var(--text)" }}
+            >
+              Tela (F)
+            </button>
+            <button
+              type="button"
+              onClick={() => sendSpecialKey("c", ["ctrl"])}
+              className="touch-btn rounded-xl px-1 text-[11px] font-semibold"
+              style={{ backgroundColor: "var(--surface-elevated)", color: "var(--text)" }}
+            >
+              Copiar
+            </button>
+            <button
+              type="button"
+              onClick={() => sendSpecialKey("v", ["ctrl"])}
+              className="touch-btn rounded-xl px-1 text-[11px] font-semibold"
+              style={{ backgroundColor: "var(--surface-elevated)", color: "var(--text)" }}
+            >
+              Colar
+            </button>
+            <button
+              type="button"
+              onClick={() => sendSpecialKey("win")}
+              className="touch-btn rounded-xl px-1 text-[11px] font-semibold"
+              style={{ backgroundColor: "var(--surface-elevated)", color: "var(--text)" }}
+            >
+              Win
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}

@@ -740,4 +740,155 @@ describe("App PWA", () => {
       query: "error query",
     });
   });
+
+  it("supports Controle tab: locked state by default, security switch in MoreView, touchpad gestures and mouse buttons", () => {
+    localStorage.clear();
+    render(<App />);
+    const ws = MockWebSocket.instances[0];
+    act(() => {
+      ws.simulateOpen();
+      ws.simulateMessage(makeSampleState({ remoteInputEnabled: false }));
+    });
+
+    // Switch to Controle tab while locked
+    fireEvent.click(screen.getByRole("button", { name: "Controle" }));
+    expect(screen.getByText("Mouse e teclado desativados")).toBeInTheDocument();
+
+    // Go to settings via CTA -> toggles switch in Mais tab
+    fireEvent.click(screen.getByRole("button", { name: "Ir para Configurações" }));
+    const toggleSwitch = screen.getByRole("switch", { name: "Ativar mouse e teclado remoto" });
+    expect(toggleSwitch).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText("Desativado")).toBeInTheDocument();
+
+    fireEvent.click(toggleSwitch);
+    const settingsMsg = JSON.parse(ws.sent.at(-1)!);
+    expect(settingsMsg).toMatchObject({
+      v: 1,
+      type: "settings",
+      remoteInputEnabled: true,
+    });
+
+    // Host confirms enabled -> switch back to Controle tab
+    act(() => {
+      ws.simulateMessage(makeSampleState({ remoteInputEnabled: true }));
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Controle" }));
+
+    const pad = screen.getByRole("application", { name: "Área do touchpad" });
+    expect(pad).toBeInTheDocument();
+
+    // 1-finger move (1.5x sensitivity: 10px -> 15px, no requestId)
+    fireEvent.touchStart(pad, { touches: [{ clientX: 100, clientY: 100 }] });
+    fireEvent.touchMove(pad, { touches: [{ clientX: 110, clientY: 104 }] });
+    act(() => {
+      vi.advanceTimersByTime(20);
+    });
+    fireEvent.touchEnd(pad, { touches: [] });
+
+    const moveMsg = ws.sent.map((s) => JSON.parse(s)).find((m) => m.action === "mouse_move");
+    expect(moveMsg).toMatchObject({ v: 1, type: "input", action: "mouse_move", dx: 15, dy: 6 });
+    expect(moveMsg.requestId).toBeUndefined();
+
+    // 1-finger quick tap -> left click
+    fireEvent.touchStart(pad, { touches: [{ clientX: 50, clientY: 50 }] });
+    fireEvent.touchEnd(pad, { touches: [] });
+    expect(JSON.parse(ws.sent.at(-1)!)).toMatchObject({
+      type: "input",
+      action: "mouse_click",
+      button: "left",
+      double: false,
+    });
+
+    // 2-finger quick tap -> right click
+    fireEvent.touchStart(pad, {
+      touches: [
+        { clientX: 40, clientY: 40 },
+        { clientX: 80, clientY: 40 },
+      ],
+    });
+    fireEvent.touchEnd(pad, { touches: [] });
+    expect(JSON.parse(ws.sent.at(-1)!)).toMatchObject({
+      type: "input",
+      action: "mouse_click",
+      button: "right",
+    });
+
+    // Vertical scroll strip drag -> mouse_scroll
+    const scrollStrip = screen.getByRole("scrollbar", { name: "Barra de rolagem vertical" });
+    fireEvent.touchStart(scrollStrip, { touches: [{ clientX: 300, clientY: 100 }] });
+    fireEvent.touchMove(scrollStrip, { touches: [{ clientX: 300, clientY: 80 }] });
+    act(() => {
+      vi.advanceTimersByTime(20);
+    });
+    fireEvent.touchEnd(scrollStrip, { touches: [] });
+
+    const scrollMsg = ws.sent.map((s) => JSON.parse(s)).find((m) => m.action === "mouse_scroll");
+    expect(scrollMsg).toMatchObject({ v: 1, type: "input", action: "mouse_scroll", dy: -100 });
+    expect(scrollMsg.requestId).toBeUndefined();
+
+    // Arrastar lock & release buttons
+    fireEvent.click(screen.getByRole("button", { name: "Arrastar" }));
+    expect(JSON.parse(ws.sent.at(-1)!)).toMatchObject({
+      type: "input",
+      action: "mouse_down",
+      button: "left",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Soltar" }));
+    expect(JSON.parse(ws.sent.at(-1)!)).toMatchObject({
+      type: "input",
+      action: "mouse_up",
+      button: "left",
+    });
+  });
+
+  it("supports Controle tab remote keyboard in batch mode (with accents) and real-time mode + quick shortcuts", () => {
+    localStorage.clear();
+    render(<App />);
+    const ws = MockWebSocket.instances[0];
+    act(() => {
+      ws.simulateOpen();
+      ws.simulateMessage(makeSampleState({ remoteInputEnabled: true }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Controle" }));
+
+    const textInput = screen.getByLabelText("Digitar texto para o PC");
+    fireEvent.change(textInput, { target: { value: "Olá ação!" } });
+    fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
+
+    expect(JSON.parse(ws.sent.at(-1)!)).toMatchObject({
+      v: 1,
+      type: "input",
+      action: "key_text",
+      text: "Olá ação!",
+    });
+
+    // Switch to Tempo real mode
+    fireEvent.click(screen.getByRole("radio", { name: "Tempo real" }));
+    const liveInput = screen.getByLabelText("Digitar texto para o PC");
+    fireEvent.change(liveInput, { target: { value: "a" } });
+    expect(JSON.parse(ws.sent.at(-1)!)).toMatchObject({
+      v: 1,
+      type: "input",
+      action: "key_text",
+      text: "a",
+    });
+
+    // Special shortcuts Alt+Tab and Copiar
+    fireEvent.click(screen.getByRole("button", { name: "Alt+Tab" }));
+    expect(JSON.parse(ws.sent.at(-1)!)).toMatchObject({
+      type: "input",
+      action: "key_press",
+      key: "tab",
+      modifiers: ["alt"],
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Copiar" }));
+    expect(JSON.parse(ws.sent.at(-1)!)).toMatchObject({
+      type: "input",
+      action: "key_press",
+      key: "c",
+      modifiers: ["ctrl"],
+    });
+  });
 });

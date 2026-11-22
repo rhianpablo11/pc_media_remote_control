@@ -185,3 +185,82 @@ export function ExitFullscreenIcon(props: IconProps) {
     </svg>
   );
 }
+
+export function TouchpadIcon(props: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <rect x="3" y="4" width="18" height="16" rx="3" />
+      <line x1="3" y1="15" x2="21" y2="15" />
+      <line x1="12" y1="15" x2="12" y2="20" />
+    </svg>
+  );
+}
+
+export function KeyboardIcon(props: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <rect x="2.5" y="5.5" width="19" height="13" rx="2.5" />
+      <path d="M6.5 9.5h1m3 0h1m3 0h1m3 0h1M6.5 12.5h1m3 0h1m3 0h1m3 0h1M8 15.5h8" />
+    </svg>
+  );
+}
+
+export function LockIcon(props: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <rect x="4.5" y="10.5" width="15" height="10" rx="2.5" />
+      <path d="M8 10.5V7a4 4 0 0 1 8 0v3.5" />
+    </svg>
+  );
+}
+
+export function BackspaceIcon(props: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <path d="M9.2 6H20a1.5 1.5 0 0 1 1.5 1.5v9A1.5 1.5 0 0 1 20 18H9.2a1.5 1.5 0 0 1-1.15-.54L3.5 12l4.55-5.46A1.5 1.5 0 0 1 9.2 6Z" />
+      <line x1="12.5" y1="9.8" x2="16.9" y2="14.2" />
+      <line x1="16.9" y1="9.8" x2="12.5" y2="14.2" />
+    </svg>
+  );
+}
+
+export function EnterKeyIcon(props: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <path d="M18.5 6v6.5a2 2 0 0 1-2 2H6" />
+      <polyline points="10 10.5 6 14.5 10 18.5" />
+    </svg>
+  );
+}
+
+export function ArrowUpIcon(props: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <polyline points="18 15 12 9 6 15" />
+    </svg>
+  );
+}
+
+export function ArrowDownIcon(props: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <polyline points="6 9 12 15 18 9" />
+    </svg>
+  );
+}
+
+export function ArrowLeftIcon(props: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <polyline points="15 18 9 12 15 6" />
+    </svg>
+  );
+}
+
+export function ArrowRightIcon(props: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <polyline points="9 18 15 12 9 6" />
+    </svg>
+  );
+}

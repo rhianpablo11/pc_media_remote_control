@@ -10,18 +10,20 @@ from collections import defaultdict
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs
 
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 
-from host.config import HostSettings, normalize_origin
+from host.config import HostConfigStore, HostSettings, normalize_origin
+from host.input_control import WindowsInputProvider
 from host.network import MdnsPublisher
 from host.pairing import (
     PairingManager,
     render_qr_data_url,
 )
 from host.protocol import ErrorMessage
-from host.providers.base import AudioControlProvider, SessionProvider
+from host.providers.base import AudioControlProvider, RemoteInputProvider, SessionProvider
 from host.providers.chrome_extension import ChromeExtensionProvider
 from host.providers.windows import WindowsProvider
 from host.state import HostStateCoordinator
@@ -67,9 +69,12 @@ def create_app(
     audio_provider: AudioControlProvider | None = None,
     chrome_provider: ChromeExtensionProvider | None = None,
     pairing_manager: PairingManager | None = None,
+    input_provider: RemoteInputProvider | None = None,
+    config_store: HostConfigStore | None = None,
 ) -> FastAPI:
     """Create and configure the FastAPI host application with pairing and security."""
     cfg = settings or HostSettings()
+    cfg_store = config_store or HostConfigStore()
     pairing_mgr = pairing_manager or cfg.pairing_manager or PairingManager()
 
     owned_windows: WindowsProvider | None = None
@@ -83,10 +88,16 @@ def create_app(
     active_providers: list[SessionProvider] = (
         list(providers) if providers is not None else [ext_provider, owned_windows]  # type: ignore[list-item]
     )
+    active_input: RemoteInputProvider = (
+        input_provider if input_provider is not None else WindowsInputProvider()
+    )
 
     coordinator = HostStateCoordinator(
         providers=active_providers,
         audio_provider=active_audio,
+        input_provider=active_input,
+        remote_input_enabled=cfg_store.get_remote_input_enabled(),
+        on_remote_input_change=cfg_store.set_remote_input_enabled,
     )
 
     async def _on_extension_change() -> None:
@@ -152,6 +163,24 @@ def create_app(
     app.state.chrome_provider = ext_provider
     app.state.settings = cfg
     app.state.pairing_manager = pairing_mgr
+    app.state.config_store = cfg_store
+
+    def _set_remote_input_threadsafe(enabled: bool) -> bool:
+        flag = coordinator.set_remote_input_enabled(enabled)
+        if server_loop is not None and server_loop.is_running():
+            try:
+                current_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                current_loop = None
+
+            coro = coordinator.broadcast_state(force=True)
+            if current_loop is server_loop:
+                server_loop.create_task(coro)
+            else:
+                asyncio.run_coroutine_threadsafe(coro, server_loop)
+        return flag
+
+    app.state.set_remote_input_enabled = _set_remote_input_threadsafe
 
     # 1. Host header validation middleware (mitigate DNS rebinding)
     @app.middleware("http")
@@ -255,6 +284,16 @@ def create_app(
             "Nenhum dispositivo pareado ainda.</td></tr>"
         )
 
+        remote_enabled = coordinator.remote_input_enabled
+        remote_badge = "Ativado" if remote_enabled else "Desativado"
+        remote_color = "#1b7a34" if remote_enabled else "#666"
+        remote_btn_label = (
+            "Desativar Mouse/Teclado Remoto"
+            if remote_enabled
+            else "Ativar Mouse/Teclado Remoto"
+        )
+        remote_next_val = "false" if remote_enabled else "true"
+
         html_content = f"""<!doctype html>
 <html lang="pt-BR">
 <head>
@@ -332,6 +371,18 @@ def create_app(
         {devices_rows}
       </tbody>
     </table>
+
+    <hr style="border: none; border-top: 1px solid #e5e5ea; margin: 28px 0;" />
+
+    <h2 style="font-size: 16px; margin: 0 0 6px 0;">Segurança — Mouse e Teclado Remoto</h2>
+    <p style="font-size: 13px; color: #666; margin: 0 0 12px 0;">
+      Status atual: <strong style="color: {remote_color};">{remote_badge}</strong>.
+      Permite mover o cursor e digitar pelo celular pareado.
+    </p>
+    <form method="POST" action="/pair/remote-input" style="margin: 0;">
+      <input type="hidden" name="enabled" value="{remote_next_val}" />
+      <button type="submit" class="btn" style="background: #1d1d1f;">{remote_btn_label}</button>
+    </form>
   </div>
 </body>
 </html>"""
@@ -351,6 +402,28 @@ def create_app(
         if not is_loopback_client(client_host):
             raise HTTPException(status_code=403, detail="Acesso restrito ao computador local.")
         pairing_mgr.revoke_device(device_id)
+        return Response(status_code=303, headers={"Location": "/pair"})
+
+    @app.post("/pair/remote-input")
+    async def toggle_remote_input_form(request: Request) -> Response:
+        client_host = request.client.host if request.client is not None else ""
+        if not is_loopback_client(client_host):
+            raise HTTPException(status_code=403, detail="Acesso restrito ao computador local.")
+        raw_body = (await request.body()).decode("utf-8", errors="ignore")
+        parsed_form = parse_qs(raw_body)
+        enabled_list = parsed_form.get("enabled")
+        raw_val = (
+            str(enabled_list[0]).strip().lower()
+            if enabled_list
+            else str(request.query_params.get("enabled") or "").strip().lower()
+        )
+        next_state = (
+            raw_val in {"1", "true", "on", "yes"}
+            if raw_val
+            else (not coordinator.remote_input_enabled)
+        )
+        coordinator.set_remote_input_enabled(next_state)
+        await coordinator.broadcast_state(force=True)
         return Response(status_code=303, headers={"Location": "/pair"})
 
     # 4. Pairing API
@@ -431,6 +504,7 @@ def create_app(
                 "lanIp": cfg.lan_ip,
                 "extensionConnected": coordinator.extension_connected,
                 "extensionId": cfg.extension_id,
+                "remoteInputEnabled": coordinator.remote_input_enabled,
             }
         )
 

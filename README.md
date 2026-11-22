@@ -20,6 +20,9 @@ Transforme seu notebook ou PC (Windows) numa central de mídia controlada pelo c
   - Volume mestre do sistema com mute.
   - Volume e silenciamento individual para cada aba do Chrome.
   - Volume por aplicativo Windows ativo via Core Audio (`pycaw`).
+- **Mouse (Touchpad) e Teclado Remoto:**
+  - Aba **"Controle"** com touchpad multi-gesto (mover cursor com sensibilidade ajustável, toque para clique esquerdo, 2 dedos para clique direito e rolagem, barra lateral de rolagem e trava de arrastar) e teclado remoto em modo envio em lote ou tempo real (com acentuação em português e atalhos como `Alt+Tab`, `Copiar`/`Colar`, setas e `Win`).
+  - **Segurança por padrão:** o controle de mouse/teclado começa **desativado por padrão**, podendo ser ligado/desligado no aplicativo, no menu da bandeja do Windows ou em `/pair`.
 - **Interface Mobile-First (PWA):**
   - Desenvolvida em React + TypeScript + Tailwind seguindo o padrão de design limpo e fluido (estilo Apple).
   - Temas Claro, Escuro e Automático (baseado no sistema).
@@ -122,6 +125,7 @@ Ao clicar com o botão direito no ícone do aplicativo na bandeja do Windows, vo
 - **📱 Parear Celular (QR Code)...:** abre a página de pareamento (`/pair`) no navegador padrão com o QR Code e PIN de 6 dígitos.
 - **🎵 Abrir Central de Mídia:** abre a interface principal (`/`) no navegador do computador.
 - **🔒 Dispositivos Pareados:** lista os aparelhos autorizados e permite revogar o acesso de qualquer dispositivo com um clique.
+- **🖱️ Mouse e Teclado Remoto:** ativa ou desativa a permissão do touchpad e teclado remoto (desativada por padrão por segurança).
 - **Iniciar com o Windows:** ativa ou desativa a inicialização automática do aplicativo em segundo plano ao ligar o computador (via registro do usuário em `HKCU\...\Run`). Ao ativar, o executável é copiado para um local estável e persistente em `%LOCALAPPDATA%\PCMediaControl\PCMediaControl.exe` (protegendo a inicialização caso a pasta original seja movida ou sincronizada pelo OneDrive).
 - **🧩 Abrir pasta da extensão...:** abre a pasta estável `%LOCALAPPDATA%\PCMediaControl\extension` no Explorer contendo a extensão pronta para ser carregada no Chrome.
 - **📂 Abrir pasta de logs:** abre a pasta `%LOCALAPPDATA%\PCMediaControl\logs` onde os logs rotativos são gravados.

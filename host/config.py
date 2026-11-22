@@ -121,6 +121,49 @@ def sync_installed_extension() -> Path:
     return target_dir
 
 
+class HostConfigStore:
+    """Persistent user settings store (%LOCALAPPDATA%\\PCMediaControl\\settings.json)."""
+
+    def __init__(self, path: Path | None = None) -> None:
+        self._path = path or (get_app_data_dir() / "settings.json")
+        self._data: dict[str, object] = self._load()
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    def _load(self) -> dict[str, object]:
+        if not self._path.is_file():
+            return {"remoteInputEnabled": False}
+        try:
+            raw = json.loads(self._path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                return {"remoteInputEnabled": bool(raw.get("remoteInputEnabled", False)), **raw}
+        except Exception:
+            pass
+        return {"remoteInputEnabled": False}
+
+    def _save(self) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = self._path.with_suffix(".tmp")
+        tmp_path.write_text(
+            json.dumps(self._data, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        os.replace(tmp_path, self._path)
+
+    def get_remote_input_enabled(self) -> bool:
+        """Return whether remote mouse and keyboard control is enabled (default False)."""
+        return bool(self._data.get("remoteInputEnabled", False))
+
+    def set_remote_input_enabled(self, enabled: bool) -> bool:
+        """Persist remote mouse/keyboard toggle to settings.json cleanly."""
+        flag = bool(enabled)
+        self._data["remoteInputEnabled"] = flag
+        self._save()
+        return flag
+
+
 DEFAULT_CLIENT_DIST_DIR = get_base_dir() / "client" / "dist"
 DEFAULT_DEV_WS_ORIGINS = ("http://localhost:5173", "http://127.0.0.1:5173")
 

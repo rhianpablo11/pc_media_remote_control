@@ -368,6 +368,8 @@ def main() -> int:
             settings=settings,
             pairing_manager=pairing_mgr,
             on_exit=lambda: setattr(server, "should_exit", True),
+            get_remote_input_enabled=lambda: app.state.coordinator.remote_input_enabled,
+            on_toggle_remote_input=app.state.set_remote_input_enabled,
         )
         tray_app.start()
 

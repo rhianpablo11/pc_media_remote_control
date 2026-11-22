@@ -7,7 +7,7 @@ import logging
 import re
 import time
 import unicodedata
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from typing import Any
 
@@ -18,6 +18,7 @@ from host.protocol import (
     AckMessage,
     CommandMessage,
     ErrorMessage,
+    InputMessage,
     OpenMessage,
     PingMessage,
     PongMessage,
@@ -25,6 +26,7 @@ from host.protocol import (
     SearchResultItem,
     SearchResultsMessage,
     SelectMessage,
+    SettingsMessage,
     StateMessage,
     VolumeMessage,
     audio_app_to_payload,
@@ -37,6 +39,7 @@ from host.providers.base import (
     AudioControlProvider,
     MasterVolumeInfo,
     MediaSessionInfo,
+    RemoteInputProvider,
     SessionProvider,
 )
 
@@ -97,6 +100,9 @@ class HostStateCoordinator:
         providers: Sequence[SessionProvider],
         audio_provider: AudioControlProvider,
         fallback_session_id: str = "windows:fallback",
+        input_provider: RemoteInputProvider | None = None,
+        remote_input_enabled: bool = False,
+        on_remote_input_change: Callable[[bool], None] | None = None,
     ) -> None:
         self._providers: list[SessionProvider] = list(providers)
         self._providers_by_source: dict[str, SessionProvider] = {
@@ -104,6 +110,9 @@ class HostStateCoordinator:
         }
         self._audio_provider = audio_provider
         self._fallback_session_id = fallback_session_id
+        self._input_provider = input_provider
+        self._remote_input_enabled: bool = bool(remote_input_enabled)
+        self._on_remote_input_change = on_remote_input_change
         self._selected_session_id: str | None = None
         self._clients: set[WebSocket] = set()
         self._last_state_json: str | None = None
@@ -113,6 +122,22 @@ class HostStateCoordinator:
         self._broadcast_pending_force: bool = False
         self._last_search_time: float = 0.0
         self._search_rate_limit_sec: float = 1.0
+
+    @property
+    def remote_input_enabled(self) -> bool:
+        """Whether remote mouse and keyboard control is currently authorized."""
+        return self._remote_input_enabled
+
+    def set_remote_input_enabled(self, enabled: bool) -> bool:
+        """Enable or disable remote mouse/keyboard control cleanly."""
+        flag = bool(enabled)
+        self._remote_input_enabled = flag
+        if self._on_remote_input_change is not None:
+            try:
+                self._on_remote_input_change(flag)
+            except Exception:  # noqa: BLE001
+                logger.exception("Falha ao persistir configuração de mouse/teclado remoto")
+        return flag
 
     @property
     def has_clients(self) -> bool:
@@ -203,6 +228,7 @@ class HostStateCoordinator:
             masterVolume=master_to_payload(master),
             audioSessions=[audio_app_to_payload(a) for a in audio_apps],
             extensionConnected=self.extension_connected,
+            remoteInputEnabled=self._remote_input_enabled,
         )
 
     def _resolve_active_session_id(self, sessions: list[MediaSessionInfo]) -> str | None:
@@ -476,7 +502,86 @@ class HostStateCoordinator:
                 ),
             )
 
+        if isinstance(msg, SettingsMessage):
+            flag = self.set_remote_input_enabled(msg.remoteInputEnabled)
+            logger.info("Configuração remoteInputEnabled alterada pelo cliente para: %s", flag)
+            self._schedule_coalesced_broadcast(force=True)
+            if msg.requestId is not None:
+                exec_ms = (time.perf_counter() - start_time) * 1000.0
+                return AckMessage(
+                    requestId=msg.requestId,
+                    ok=True,
+                    clientSentAt=msg.clientSentAt,
+                    execMs=round(exec_ms, 2),
+                    target="settings",
+                )
+            return None
+
+        if isinstance(msg, InputMessage):
+            if not self._remote_input_enabled:
+                return ErrorMessage(
+                    code="remote_input_disabled",
+                    message="Mouse e teclado remoto estão desativados nas configurações.",
+                    requestId=msg.requestId,
+                )
+            ok, reason = await self._dispatch_input(msg)
+            exec_ms = (time.perf_counter() - start_time) * 1000.0
+            if not ok:
+                if msg.requestId is not None:
+                    return AckMessage(
+                        requestId=msg.requestId,
+                        ok=False,
+                        clientSentAt=msg.clientSentAt,
+                        execMs=round(exec_ms, 2),
+                        target=msg.action,
+                        reason=reason,
+                    )
+                if reason == "input_not_supported":
+                    return ErrorMessage(
+                        code="input_not_supported",
+                        message="Controle remoto de entrada indisponível neste host.",
+                        requestId=msg.requestId,
+                    )
+                return None
+            if msg.requestId is not None:
+                return AckMessage(
+                    requestId=msg.requestId,
+                    ok=True,
+                    clientSentAt=msg.clientSentAt,
+                    execMs=round(exec_ms, 2),
+                    target=msg.action,
+                )
+            return None
+
         return None
+
+    async def _dispatch_input(self, msg: InputMessage) -> tuple[bool, str | None]:
+        if self._input_provider is None:
+            return False, "input_not_supported"
+
+        action = msg.action
+        if action == "mouse_move":
+            ok = await self._input_provider.move_mouse(msg.dx or 0, msg.dy or 0)
+            return (ok, None if ok else "mouse_move_failed")
+        if action == "mouse_click":
+            ok = await self._input_provider.click_mouse(msg.button or "left", msg.double)
+            return (ok, None if ok else "mouse_click_failed")
+        if action == "mouse_down":
+            ok = await self._input_provider.mouse_button(msg.button or "left", "down")
+            return (ok, None if ok else "mouse_down_failed")
+        if action == "mouse_up":
+            ok = await self._input_provider.mouse_button(msg.button or "left", "up")
+            return (ok, None if ok else "mouse_up_failed")
+        if action == "mouse_scroll":
+            ok = await self._input_provider.scroll_mouse(msg.dx or 0, msg.dy or 0)
+            return (ok, None if ok else "mouse_scroll_failed")
+        if action == "key_text":
+            ok = await self._input_provider.type_text(msg.text or "")
+            return (ok, None if ok else "key_text_failed")
+        if action == "key_press":
+            ok = await self._input_provider.press_key(msg.key or "", list(msg.modifiers))
+            return (ok, None if ok else "key_press_failed")
+        return False, "unknown_input_action"
 
     async def _dispatch_open(self, msg: OpenMessage) -> bool:
         chrome = self._providers_by_source.get("chrome")

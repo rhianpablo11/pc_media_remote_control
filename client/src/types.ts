@@ -75,6 +75,7 @@ export interface StateMessage {
   masterVolume: MasterVolume;
   audioSessions: AudioSession[];
   extensionConnected: boolean;
+  remoteInputEnabled?: boolean;
 }
 
 export interface ErrorMessage {
@@ -103,7 +104,29 @@ export type ConnectionStatus =
   | "pairing_required";
 
 export type ThemeMode = "auto" | "light" | "dark";
-export type ActiveTab = "now_playing" | "volume" | "search" | "more";
+export type ActiveTab = "now_playing" | "volume" | "search" | "remote" | "more";
+
+export type MouseButton = "left" | "right" | "middle";
+export type ModifierKey = "ctrl" | "alt" | "shift" | "win";
+export type InputAction =
+  | "mouse_move"
+  | "mouse_click"
+  | "mouse_down"
+  | "mouse_up"
+  | "mouse_scroll"
+  | "key_text"
+  | "key_press";
+
+export interface InputMessagePayload {
+  action: InputAction;
+  dx?: number;
+  dy?: number;
+  button?: MouseButton;
+  double?: boolean;
+  text?: string;
+  key?: string;
+  modifiers?: ModifierKey[];
+}
 
 export interface SearchResultItem {
   id: string;

@@ -5,10 +5,12 @@ import {
   NowPlayingTabIcon,
   SearchIcon,
   SlidersIcon,
+  TouchpadIcon,
 } from "./components/Icons";
 import { MoreView } from "./components/MoreView";
 import { NowPlayingView } from "./components/NowPlayingView";
 import { PairingPlaceholder } from "./components/PairingPlaceholder";
+import { RemoteInputView } from "./components/RemoteInputView";
 import { SearchView } from "./components/SearchView";
 import { SessionSheet } from "./components/SessionSheet";
 import { VolumeView } from "./components/VolumeView";
@@ -52,6 +54,8 @@ export function App() {
     sendOpen,
     searchYouTube,
     playVideo,
+    sendInput,
+    setRemoteInputEnabled,
     reconnectNow,
     pairWithPin,
     pairedDevices,
@@ -166,6 +170,13 @@ export function App() {
             audioSessions={state?.audioSessions ?? []}
             onVolume={sendVolume}
           />
+        ) : activeTab === "remote" ? (
+          <RemoteInputView
+            remoteInputEnabled={state?.remoteInputEnabled ?? false}
+            onSendInput={sendInput}
+            onSetRemoteInputEnabled={setRemoteInputEnabled}
+            onOpenSettings={() => setActiveTab("more")}
+          />
         ) : (
           <MoreView
             extensionConnected={state?.extensionConnected ?? false}
@@ -175,6 +186,8 @@ export function App() {
             onOpen={sendOpen}
             onCommand={sendCommand}
             onReconnect={reconnectNow}
+            remoteInputEnabled={state?.remoteInputEnabled ?? false}
+            onSetRemoteInputEnabled={setRemoteInputEnabled}
             pairedDevices={pairedDevices}
             onRefreshDevices={refreshPairedDevices}
             onRevokeDevice={revokeDevice}
@@ -186,7 +199,7 @@ export function App() {
 
       <nav
         aria-label="Navegação principal"
-        className="fixed bottom-0 left-1/2 z-40 grid w-full max-w-[430px] -translate-x-1/2 grid-cols-4 border-t px-2 pt-1.5 pb-[calc(0.45rem+env(safe-area-inset-bottom))]"
+        className="fixed bottom-0 left-1/2 z-40 grid w-full max-w-[430px] -translate-x-1/2 grid-cols-5 border-t px-1.5 pt-1.5 pb-[calc(0.45rem+env(safe-area-inset-bottom))]"
         style={{
           backgroundColor: "var(--surface)",
           borderColor: "var(--separator)",
@@ -229,6 +242,19 @@ export function App() {
         >
           <SlidersIcon className="h-5 w-5" />
           <span>Volume</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab("remote")}
+          aria-current={activeTab === "remote" ? "page" : undefined}
+          className="touch-btn flex min-h-[52px] flex-col items-center justify-center gap-0.5 rounded-2xl text-[11px] font-semibold"
+          style={{
+            color: activeTab === "remote" ? "var(--accent)" : "var(--text-secondary)",
+          }}
+        >
+          <TouchpadIcon className="h-5 w-5" />
+          <span>Controle</span>
         </button>
 
         <button

@@ -1,6 +1,6 @@
 # Fases — PC Media Control
 
-**Fase atual: 6**
+**Fase atual: 7**
 
 Regra: concluir a fase, marcar os checkboxes, commitar, parar e reportar. Só avançar quando o usuário autorizar.
 
@@ -83,8 +83,8 @@ Objetivo: descobrir o que o Windows realmente nos entrega, antes de construir qu
 **Aceite:** do celular, busco no YouTube, vejo os resultados com capa/título/duração/canal, toco em "Tocar agora" e o vídeo passa a rodar no notebook em tela cheia sem precisar tocar no computador.
 
 ## Fase 7 — Modo touchpad/teclado remoto (opcional)
-- [ ] Tela de touchpad (mover cursor, clique, rolagem) e teclado de texto
-- [ ] Ligado/desligado nas configurações por segurança
+- [x] Tela de touchpad (mover cursor, clique, rolagem) e teclado de texto *(aba "Controle" no PWA com touchpad multi-gesto, barra de rolagem lateral, trava de arrastar, teclado em lote + tempo real e atalhos rápidos via Win32 `SendInput` + `KEYEVENTF_UNICODE`)*
+- [x] Ligado/desligado nas configurações por segurança *(desativado por padrão, persistido em `%LOCALAPPDATA%\PCMediaControl\settings.json` com controle autoritativo no host e interruptores no PWA, bandeja do Windows e `/pair`)*
 
 ## Futuro
 - Linux (MPRIS), macOS, cliente iOS testado, app nativo, múltiplos notebooks.

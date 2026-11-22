@@ -10,6 +10,8 @@ interface MoreViewProps {
   onOpen: (mode: "youtube_search" | "url", payload: { query?: string; url?: string }) => boolean;
   onCommand: (sessionId: string, action: MediaAction) => void;
   onReconnect: () => void;
+  remoteInputEnabled?: boolean;
+  onSetRemoteInputEnabled?: (enabled: boolean) => boolean;
   pairedDevices?: PairedDevicePublic[];
   onRefreshDevices?: () => void;
   onRevokeDevice?: (deviceId: string) => void;
@@ -31,6 +33,8 @@ export function MoreView({
   onOpen,
   onCommand,
   onReconnect,
+  remoteInputEnabled = false,
+  onSetRemoteInputEnabled,
   pairedDevices = [],
   onRefreshDevices,
   onRevokeDevice,
@@ -163,6 +167,50 @@ export function MoreView({
           </button>
         </div>
       </section>
+
+      {/* 3.0 Segurança: Mouse e Teclado Remoto */}
+      {onSetRemoteInputEnabled ? (
+        <section className="card-surface flex items-center justify-between gap-3 p-5 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h2 className="text-base font-semibold" style={{ color: "var(--text)" }}>
+                Mouse e Teclado Remoto
+              </h2>
+              <span
+                className="rounded-full px-2 py-0.5 text-[11px] font-semibold"
+                style={{
+                  backgroundColor: "var(--surface-elevated)",
+                  color: remoteInputEnabled ? "var(--ok)" : "var(--text-secondary)",
+                }}
+              >
+                {remoteInputEnabled ? "Ativado" : "Desativado"}
+              </span>
+            </div>
+            <p className="mt-1 text-xs" style={{ color: "var(--text-secondary)" }}>
+              Desativado por padrão para segurança. Permite controlar o cursor e digitar pelo celular.
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={remoteInputEnabled}
+            aria-label="Ativar mouse e teclado remoto"
+            onClick={() => onSetRemoteInputEnabled(!remoteInputEnabled)}
+            className="touch-btn relative inline-flex h-7 w-12 shrink-0 items-center rounded-full px-1 transition-colors"
+            style={{
+              backgroundColor: remoteInputEnabled ? "var(--accent)" : "var(--separator)",
+              minHeight: "28px",
+            }}
+          >
+            <span
+              className="inline-block h-5 w-5 rounded-full bg-white shadow transition-transform"
+              style={{
+                transform: remoteInputEnabled ? "translateX(20px)" : "translateX(0px)",
+              }}
+            />
+          </button>
+        </section>
+      ) : null}
 
       {/* 3. Conexão com o PC */}
       <section className="card-surface flex items-center justify-between gap-3 p-5 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">

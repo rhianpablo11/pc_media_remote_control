@@ -9,12 +9,14 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, TypeAdapter, model_validator
 
+from host.input_control import ALLOWED_REMOTE_KEYS, is_dangerous_key_combo
 from host.providers.base import (
     AudioAppInfo,
     MasterVolumeInfo,
     MediaAction,
     MediaSessionInfo,
     MediaStatus,
+    MouseButton,
     PlaybackControls,
 )
 
@@ -86,6 +88,7 @@ class StateMessage(BaseModel):
     masterVolume: MasterVolumePayload
     audioSessions: list[AudioSessionPayload]
     extensionConnected: bool = False
+    remoteInputEnabled: bool = False
 
 
 class ErrorMessage(BaseModel):
@@ -269,6 +272,97 @@ class SearchResultsMessage(BaseModel):
     reason: str | None = None
 
 
+InputAction = Literal[
+    "mouse_move",
+    "mouse_click",
+    "mouse_down",
+    "mouse_up",
+    "mouse_scroll",
+    "key_text",
+    "key_press",
+]
+ModifierKey = Literal["ctrl", "alt", "shift", "win"]
+
+
+class InputMessage(BaseModel):
+    """Client -> server remote touchpad mouse and keyboard input event."""
+
+    v: Literal[1] = 1
+    type: Literal["input"] = "input"
+    action: InputAction
+    dx: int | None = None
+    dy: int | None = None
+    button: MouseButton | None = None
+    double: bool = False
+    text: str | None = None
+    key: str | None = None
+    modifiers: list[ModifierKey] = Field(default_factory=list)
+    requestId: str | None = None
+    clientSentAt: float | None = None
+
+    @model_validator(mode="after")
+    def _validate_input_payload(self) -> InputMessage:
+        if self.action == "mouse_move":
+            if self.dx is None or self.dy is None:
+                raise ValueError("O evento 'mouse_move' exige 'dx' e 'dy' inteiros.")
+            if not (-500 <= self.dx <= 500) or not (-500 <= self.dy <= 500):
+                raise ValueError("Deltas de 'mouse_move' devem estar entre -500 e 500.")
+            return self
+
+        if self.action == "mouse_scroll":
+            if self.dx is None and self.dy is None:
+                raise ValueError("O evento 'mouse_scroll' exige 'dx' e/ou 'dy'.")
+            if self.dx is not None and not (-1200 <= self.dx <= 1200):
+                raise ValueError("Delta 'dx' de 'mouse_scroll' deve estar entre -1200 e 1200.")
+            if self.dy is not None and not (-1200 <= self.dy <= 1200):
+                raise ValueError("Delta 'dy' de 'mouse_scroll' deve estar entre -1200 e 1200.")
+            if self.dx is None:
+                self.dx = 0
+            if self.dy is None:
+                self.dy = 0
+            return self
+
+        if self.action in {"mouse_click", "mouse_down", "mouse_up"}:
+            if self.button is None:
+                self.button = "left"
+            return self
+
+        if self.action == "key_text":
+            if self.text is None or len(self.text) == 0:
+                raise ValueError("O evento 'key_text' exige 'text' não vazio.")
+            if "\x00" in self.text:
+                raise ValueError("O evento 'key_text' não aceita bytes nulos.")
+            if len(self.text) > 500:
+                raise ValueError("O evento 'key_text' aceita no máximo 500 caracteres.")
+            return self
+
+        # key_press
+        if not self.key or not self.key.strip():
+            raise ValueError("O evento 'key_press' exige 'key'.")
+        norm_key = self.key.strip().lower()
+        if norm_key not in ALLOWED_REMOTE_KEYS:
+            raise ValueError(f"Tecla '{norm_key}' não permitida no controle remoto.")
+        dedup_mods: list[ModifierKey] = []
+        for mod in self.modifiers:
+            if mod not in dedup_mods:
+                dedup_mods.append(mod)
+        if is_dangerous_key_combo(norm_key, dedup_mods):
+            raise ValueError("Combinação de teclas bloqueada por segurança.")
+        self.key = norm_key
+        self.modifiers = dedup_mods
+        return self
+
+
+class SettingsMessage(BaseModel):
+    """Client -> server host security settings toggle (e.g. remote touchpad/keyboard)."""
+
+    v: Literal[1] = 1
+    type: Literal["settings"] = "settings"
+    remoteInputEnabled: bool
+    requestId: str | None = None
+    clientSentAt: float | None = None
+
+
 ClientMessage = Annotated[
     CommandMessage
     | VolumeMessage
@@ -276,7 +370,9 @@ ClientMessage = Annotated[
     | PingMessage
     | OpenMessage
     | AuthMessage
-    | SearchMessage,
+    | SearchMessage
+    | InputMessage
+    | SettingsMessage,
     Field(discriminator="type"),
 ]
 _CLIENT_MESSAGE_ADAPTER: TypeAdapter[ClientMessage] = TypeAdapter(ClientMessage)
