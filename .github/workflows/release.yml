@@ -1,0 +1,123 @@
+name: Release Windows Executable
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag da release (ex.: v1.0.0). Deixe vazio para apenas gerar artefato de teste sem publicar Release."
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+          cache-dependency-path: |
+            host/requirements.txt
+            scripts/requirements.txt
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: "client/package-lock.json"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r host/requirements.txt pytest ruff
+
+      - name: Install client dependencies
+        run: npm --prefix client ci
+
+      - name: Run quality gate
+        run: |
+          ruff check .
+          pytest -v
+          node --test tests/test_extension_helpers.mjs
+          npm --prefix client run lint
+          npm --prefix client test
+          npm --prefix client run build
+
+      - name: Build Windows executable
+        run: |
+          python scripts/build_exe.py
+          if (-not (Test-Path "dist/PCMediaControl.exe")) {
+            throw "Executable not found at dist/PCMediaControl.exe"
+          }
+
+      - name: Package release artifacts
+        run: |
+          New-Item -ItemType Directory -Force -Path release-artifacts | Out-Null
+          Copy-Item "dist/PCMediaControl.exe" "release-artifacts/PCMediaControl.exe" -Force
+          Compress-Archive -Path "extension\*" -DestinationPath "release-artifacts\PCMediaControl-extension.zip" -Force
+          Compress-Archive -Path "scripts\allow_firewall.cmd", "scripts\allow_firewall.ps1" -DestinationPath "release-artifacts\PCMediaControl-firewall-helper.zip" -Force
+
+          $files = @(
+            "PCMediaControl.exe",
+            "PCMediaControl-extension.zip",
+            "PCMediaControl-firewall-helper.zip"
+          )
+          $lines = foreach ($name in $files) {
+            $hash = (Get-FileHash -Path "release-artifacts/$name" -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $name"
+          }
+          $outPath = (Resolve-Path "release-artifacts").Path + "\SHA256SUMS.txt"
+          [System.IO.File]::WriteAllLines($outPath, $lines, [System.Text.UTF8Encoding]::new($false))
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pc-media-control-windows-x64
+          path: release-artifacts/*
+          retention-days: 14
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          name: PC Media Control ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') || contains(inputs.tag, '-') }}
+          body: |
+            ## PC Media Control (Windows x64)
+
+            Controle seu PC ou notebook Windows diretamente pelo celular na mesma rede Wi-Fi, sem nuvem e sem cadastro.
+
+            ### Arquivos desta release
+            - **`PCMediaControl.exe`** — Aplicativo principal (servidor local + interface mobile + ícone na bandeja do Windows + extensão Chrome integrada).
+            - **`PCMediaControl-extension.zip`** — Cópia avulsa da extensão Chrome MV3 (opcional; o próprio `.exe` já sincroniza a extensão automaticamente em `%LOCALAPPDATA%\PCMediaControl\extension`).
+            - **`PCMediaControl-firewall-helper.zip`** — Scripts auxiliares (`allow_firewall.cmd` e `allow_firewall.ps1`) para liberar a porta `8765` na sub-rede local caso o aviso do Firewall do Windows não apareça.
+            - **`SHA256SUMS.txt`** — Checksums SHA-256 dos arquivos gerados.
+
+            ### Instalação rápida em 4 passos
+            1. Baixe e execute **`PCMediaControl.exe`** (o app abrirá um ícone na bandeja do sistema, perto do relógio).
+            2. No aviso do Firewall do Windows Defender, marque **somente "Redes privadas"** e clique em **Permitir acesso**.
+            3. Clique com o botão direito no ícone da bandeja → **🧩 Abrir pasta da extensão...** (abre o assistente `/pair#extensao` com o caminho copiado e o Explorer destacando a pasta `extension`); cole `chrome://extensions` no Chrome, ative o **Modo do desenvolvedor** e arraste a pasta para dentro da aba.
+            4. Na mesma página de pareamento (ou em **📱 Parear Celular (QR Code)...**), escaneie o QR Code ou digite o PIN de 6 dígitos no navegador do celular.
+          files: |
+            release-artifacts/PCMediaControl.exe
+            release-artifacts/PCMediaControl-extension.zip
+            release-artifacts/PCMediaControl-firewall-helper.zip
+            release-artifacts/SHA256SUMS.txt

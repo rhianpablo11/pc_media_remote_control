@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -20,7 +22,8 @@ def build() -> int:
     dist_html = root_dir / "client" / "dist" / "index.html"
     if not dist_html.is_file():
         print("\n[1/2] Build do frontend PWA não encontrado. Executando npm run build...")
-        res = subprocess.run(["npm", "--prefix", "client", "run", "build"], check=False)
+        npm_bin = shutil.which("npm") or "npm"
+        res = subprocess.run([npm_bin, "--prefix", "client", "run", "build"], check=False)
         if res.returncode != 0:
             print("[ERRO] Falha ao compilar o frontend client/")
             return res.returncode
@@ -30,9 +33,6 @@ def build() -> int:
     # 2. Limpeza prévia do diretório build se existir
     build_dir = root_dir / "build"
     if build_dir.exists():
-        import shutil
-        import time
-
         for _ in range(3):
             try:
                 shutil.rmtree(build_dir, ignore_errors=True)
@@ -42,9 +42,10 @@ def build() -> int:
 
     # 3. Execução do PyInstaller
     print("\n[2/2] Executando PyInstaller com pc_media_control.spec...")
-    pyinstaller_bin = Path(sys.executable).parent / "pyinstaller.exe"
     cmd = [
-        str(pyinstaller_bin) if pyinstaller_bin.is_file() else "pyinstaller",
+        sys.executable,
+        "-m",
+        "PyInstaller",
         "--noconfirm",
         "pc_media_control.spec",
     ]
