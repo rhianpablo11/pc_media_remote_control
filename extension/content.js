@@ -43,8 +43,10 @@
   }
 
   function findClickableSkipAdButton() {
+    const scope = document.querySelector("#movie_player, .html5-video-player");
+    if (!scope) return null;
     for (const selector of helpers.SKIP_AD_SELECTORS) {
-      const candidates = document.querySelectorAll(selector);
+      const candidates = scope.querySelectorAll(selector);
       for (const btn of candidates) {
         if (isElementVisibleAndEnabled(btn)) {
           return btn;
@@ -429,9 +431,12 @@
         skipped = true;
       }
 
-      const overlays = document.querySelectorAll(
-        ".ytp-ad-overlay-close-button, button.ytp-ad-overlay-close-button, [aria-label*='Fechar anúncio' i], [aria-label*='Close ad' i]"
-      );
+      const playerScope = document.querySelector("#movie_player, .html5-video-player");
+      const overlays = playerScope
+        ? playerScope.querySelectorAll(
+            ".ytp-ad-overlay-close-button, button.ytp-ad-overlay-close-button, [aria-label*='Fechar anúncio' i], [aria-label*='Close ad' i]"
+          )
+        : [];
       for (const btn of overlays) {
         if (isElementVisibleAndEnabled(btn)) {
           if (typeof helpers.triggerPointerAndClick === "function") {
@@ -444,7 +449,7 @@
       }
 
       const isAd = typeof helpers.isYoutubeAdShowing === "function" ? helpers.isYoutubeAdShowing() : false;
-      if (isAd || !skipped) {
+      if (isAd) {
         const ads = document.querySelectorAll("#movie_player video, .html5-main-video");
         for (const vid of ads) {
           if (Number.isFinite(vid.duration) && vid.duration > 0) {

@@ -394,7 +394,7 @@ test("parseSearchResults parses real fixture, filters ads/channels/playlists and
   assert.equal(limited.length, 2);
 });
 
-test("isYoutubeAdShowing detects ad-showing, ad-interrupting and video-ads", () => {
+test("isYoutubeAdShowing detects ad-showing and ad-interrupting without residual .video-ads false positives", () => {
   assert.equal(contentHelpers.isYoutubeAdShowing(null), false);
 
   // Mock doc with ad-showing class on movie player
@@ -427,8 +427,8 @@ test("isYoutubeAdShowing detects ad-showing, ad-interrupting and video-ads", () 
   };
   assert.equal(contentHelpers.isYoutubeAdShowing(mockDocWithInterrupting), true);
 
-  // Mock doc with video-ads container having children
-  const mockDocWithAdsContainer = {
+  // Residual .video-ads children without ad-showing/ad-interrupting must NOT trigger false positive
+  const mockDocWithResidualAdsContainer = {
     querySelector: (sel) => {
       if (sel.includes("#movie_player")) {
         return { classList: { contains: () => false } };
@@ -439,7 +439,7 @@ test("isYoutubeAdShowing detects ad-showing, ad-interrupting and video-ads", () 
       return null;
     },
   };
-  assert.equal(contentHelpers.isYoutubeAdShowing(mockDocWithAdsContainer), true);
+  assert.equal(contentHelpers.isYoutubeAdShowing(mockDocWithResidualAdsContainer), false);
 
   // Mock doc with no ads
   const mockDocNoAds = {
@@ -456,7 +456,7 @@ test("isYoutubeAdShowing detects ad-showing, ad-interrupting and video-ads", () 
   assert.equal(contentHelpers.isYoutubeAdShowing(mockDocNoAds), false);
 });
 
-test("SKIP_AD_SELECTORS covers modern YouTube ad skip button selectors", () => {
+test("SKIP_AD_SELECTORS covers modern YouTube ad skip buttons and excludes broad navigation matches", () => {
   const sel = contentHelpers.SKIP_AD_SELECTORS;
   assert.ok(sel.includes(".ytp-ad-skip-button-modern"));
   assert.ok(sel.includes(".ytp-skip-ad-button"));
@@ -464,6 +464,14 @@ test("SKIP_AD_SELECTORS covers modern YouTube ad skip button selectors", () => {
   assert.ok(sel.includes(".ytp-ad-skip-button-slot button"));
   assert.ok(sel.includes("[id^='skip-button:'] button"));
   assert.ok(sel.includes("button.ytp-ad-overlay-close-button"));
+  assert.ok(sel.includes("[aria-label*='Pular anúncio' i]"));
+  assert.ok(sel.includes("[aria-label*='Skip ad' i]"));
+
+  // Prevent matching YouTube's permanent "Pular navegação" / "Skip navigation" button
+  assert.equal(sel.includes("[aria-label*='Pular' i]"), false);
+  assert.equal(sel.includes("[aria-label*='Skip' i]"), false);
+  assert.equal(sel.includes(".ytp-ad-preview-container"), false);
+  assert.equal(sel.includes("[id^='skip-button:']"), false);
 });
 
 

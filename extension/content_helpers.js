@@ -18,31 +18,22 @@
     ".ytp-ad-skip-button-text-modern",
     "[id^='skip-button:'] button",
     "button[id^='skip-button:']",
-    "[id^='skip-button:']",
     ".videoAdUiSkipButton",
-    ".ytp-ad-preview-container",
     "button.ytp-ad-overlay-close-button",
     ".ytp-ad-overlay-close-button",
-    "[aria-label*='Pular' i]",
-    "[aria-label*='Skip' i]",
+    "[aria-label*='Pular anúncio' i]",
+    "[aria-label*='Skip ad' i]",
+    "[aria-label*='Skip ads' i]",
   ];
 
   function isYoutubeAdShowing(doc = (typeof document !== "undefined" ? document : null)) {
     if (!doc) return false;
     const player = doc.querySelector("#movie_player, .html5-video-player");
-    if (player) {
-      if (
-        player.classList.contains("ad-showing") ||
-        player.classList.contains("ad-interrupting")
-      ) {
-        return true;
-      }
-    }
-    const adsContainer = doc.querySelector(".video-ads, .ytp-ad-player-overlay");
-    if (adsContainer && adsContainer.children && adsContainer.children.length > 0) {
-      return true;
-    }
-    return false;
+    if (!player) return false;
+    return (
+      player.classList.contains("ad-showing") ||
+      player.classList.contains("ad-interrupting")
+    );
   }
 
   function triggerPointerAndClick(element) {

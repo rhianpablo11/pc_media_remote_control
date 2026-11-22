@@ -32,11 +32,41 @@ type SensitivityOption = 0.9 | 1.5 | 2.2;
 type KeyboardMode = "batch" | "live";
 
 const SENSITIVITY_KEY = "pc_media_touchpad_sensitivity";
+const PAD_HEIGHT_KEY = "pc_media_touchpad_height";
+const MIN_PAD_HEIGHT = 180;
+const MAX_PAD_HEIGHT = 640;
+const DEFAULT_PAD_HEIGHT = 320;
+
 const SENSITIVITY_OPTIONS: { value: SensitivityOption; label: string }[] = [
   { value: 0.9, label: "0.9x" },
   { value: 1.5, label: "1.5x" },
   { value: 2.2, label: "2.2x" },
 ];
+const PAD_SIZE_PRESETS: { height: number; label: string }[] = [
+  { height: 220, label: "P" },
+  { height: 320, label: "M" },
+  { height: 440, label: "G" },
+  { height: 560, label: "Max" },
+];
+
+function clampPadHeight(val: number): number {
+  return Math.max(MIN_PAD_HEIGHT, Math.min(MAX_PAD_HEIGHT, Math.round(val)));
+}
+
+function loadPadHeight(): number {
+  try {
+    const raw = localStorage.getItem(PAD_HEIGHT_KEY);
+    if (raw !== null) {
+      const parsed = Number(raw);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        return clampPadHeight(parsed);
+      }
+    }
+  } catch {
+    // Ignore storage unavailability
+  }
+  return DEFAULT_PAD_HEIGHT;
+}
 
 function loadSensitivity(): SensitivityOption {
   try {
@@ -59,12 +89,16 @@ export function RemoteInputView({
   onOpenSettings,
 }: RemoteInputViewProps) {
   const [sensitivity, setSensitivity] = useState<SensitivityOption>(() => loadSensitivity());
+  const [padHeight, setPadHeight] = useState<number>(() => loadPadHeight());
   const [dragLocked, setDragLocked] = useState(false);
   const [keyboardMode, setKeyboardMode] = useState<KeyboardMode>("batch");
   const [batchText, setBatchText] = useState("");
   const [liveText, setLiveText] = useState("");
 
   const dragLockedRef = useRef(false);
+  const padHeightRef = useRef(padHeight);
+  padHeightRef.current = padHeight;
+  const resizeDragRef = useRef({ active: false, startY: 0, startHeight: DEFAULT_PAD_HEIGHT });
   const pendingMoveRef = useRef({ dx: 0, dy: 0 });
   const pendingScrollRef = useRef({ dx: 0, dy: 0 });
   const rafIdRef = useRef<number | null>(null);
@@ -132,6 +166,72 @@ export function RemoteInputView({
     } catch {
       // Ignore storage error
     }
+  };
+
+  const persistPadHeight = (nextHeight: number) => {
+    const clamped = clampPadHeight(nextHeight);
+    try {
+      localStorage.setItem(PAD_HEIGHT_KEY, String(clamped));
+    } catch {
+      // Ignore storage error
+    }
+    return clamped;
+  };
+
+  const handleSizePreset = (nextHeight: number) => {
+    triggerHaptic(6);
+    const clamped = persistPadHeight(nextHeight);
+    setPadHeight(clamped);
+  };
+
+  const onResizeTouchStart = (e: TouchEvent<HTMLDivElement>) => {
+    if (e.touches.length === 0) return;
+    touchActiveRef.current = true;
+    resizeDragRef.current = {
+      active: true,
+      startY: e.touches[0].clientY,
+      startHeight: padHeightRef.current,
+    };
+  };
+
+  const onResizeTouchMove = (e: TouchEvent<HTMLDivElement>) => {
+    if (!resizeDragRef.current.active || e.touches.length === 0) return;
+    const next = clampPadHeight(
+      resizeDragRef.current.startHeight + (e.touches[0].clientY - resizeDragRef.current.startY),
+    );
+    setPadHeight(next);
+  };
+
+  const onResizeTouchEnd = (e: TouchEvent<HTMLDivElement>) => {
+    if (!resizeDragRef.current.active || e.touches.length > 0) return;
+    resizeDragRef.current.active = false;
+    persistPadHeight(padHeightRef.current);
+    window.setTimeout(() => {
+      touchActiveRef.current = false;
+    }, 60);
+  };
+
+  const onResizePointerDown = (e: PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType === "touch" || touchActiveRef.current) return;
+    resizeDragRef.current = {
+      active: true,
+      startY: e.clientY,
+      startHeight: padHeightRef.current,
+    };
+  };
+
+  const onResizePointerMove = (e: PointerEvent<HTMLDivElement>) => {
+    if (!resizeDragRef.current.active || e.pointerType === "touch" || touchActiveRef.current) return;
+    const next = clampPadHeight(
+      resizeDragRef.current.startHeight + (e.clientY - resizeDragRef.current.startY),
+    );
+    setPadHeight(next);
+  };
+
+  const onResizePointerUp = (e: PointerEvent<HTMLDivElement>) => {
+    if (!resizeDragRef.current.active || e.pointerType === "touch") return;
+    resizeDragRef.current.active = false;
+    persistPadHeight(padHeightRef.current);
   };
 
   // Auto-release held left mouse button when disabled or unmounted
@@ -495,7 +595,7 @@ export function RemoteInputView({
       {/* 1. Touchpad card */}
       <section className="card-surface p-4 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-1.5">
             <span
               className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold"
               style={{
@@ -535,6 +635,31 @@ export function RemoteInputView({
                 );
               })}
             </div>
+
+            <div
+              className="inline-flex rounded-xl p-0.5"
+              role="group"
+              aria-label="Tamanho do touchpad"
+              style={{ backgroundColor: "var(--surface-elevated)" }}
+            >
+              {PAD_SIZE_PRESETS.map((preset) => {
+                const selected = Math.abs(padHeight - preset.height) <= 12;
+                return (
+                  <button
+                    key={preset.label}
+                    type="button"
+                    onClick={() => handleSizePreset(preset.height)}
+                    className="rounded-lg px-2 py-1 text-[11px] font-semibold"
+                    style={{
+                      backgroundColor: selected ? "var(--surface)" : "transparent",
+                      color: selected ? "var(--accent)" : "var(--text-secondary)",
+                    }}
+                  >
+                    {preset.label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           <button
@@ -552,16 +677,18 @@ export function RemoteInputView({
 
         {/* Touchpad + Vertical Scroll Strip */}
         <div
+          data-testid="touchpad-container"
           className="flex overflow-hidden rounded-[22px]"
           style={{
             backgroundColor: "var(--surface-elevated)",
             border: "1px solid var(--separator)",
+            height: `${padHeight}px`,
           }}
         >
           <div
             role="application"
             aria-label="Área do touchpad"
-            className="touch-none select-none flex min-h-[230px] flex-1 flex-col items-center justify-center p-4 text-center"
+            className="touch-none select-none flex flex-1 flex-col items-center justify-center p-4 text-center"
             onTouchStart={onPadTouchStart}
             onTouchMove={onPadTouchMove}
             onTouchEnd={onPadTouchEnd}
@@ -606,8 +733,33 @@ export function RemoteInputView({
           </div>
         </div>
 
+        {/* Drag handle to resize touchpad height smoothly */}
+        <div
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Redimensionar altura do touchpad"
+          aria-valuenow={padHeight}
+          aria-valuemin={MIN_PAD_HEIGHT}
+          aria-valuemax={MAX_PAD_HEIGHT}
+          className="touch-none select-none mt-1.5 flex h-5 w-full cursor-ns-resize items-center justify-center"
+          onTouchStart={onResizeTouchStart}
+          onTouchMove={onResizeTouchMove}
+          onTouchEnd={onResizeTouchEnd}
+          onTouchCancel={onResizeTouchEnd}
+          onPointerDown={onResizePointerDown}
+          onPointerMove={onResizePointerMove}
+          onPointerUp={onResizePointerUp}
+          onPointerCancel={onResizePointerUp}
+        >
+          <span
+            className="h-1 w-12 rounded-full"
+            style={{ backgroundColor: "var(--separator)" }}
+            aria-hidden="true"
+          />
+        </div>
+
         {/* Mouse Action Buttons */}
-        <div className="mt-3 grid grid-cols-3 gap-2">
+        <div className="mt-2 grid grid-cols-3 gap-2">
           <button
             type="button"
             onClick={() => {

@@ -891,4 +891,39 @@ describe("App PWA", () => {
       modifiers: ["ctrl"],
     });
   });
+
+  it("allows resizing touchpad via P/M/G/Max presets and drag handle with persistence", () => {
+    localStorage.clear();
+    render(<App />);
+    const ws = MockWebSocket.instances[0];
+    act(() => {
+      ws.simulateOpen();
+      ws.simulateMessage(makeSampleState({ remoteInputEnabled: true }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Controle" }));
+
+    const container = screen.getByTestId("touchpad-container");
+    expect(container).toHaveStyle({ height: "320px" });
+
+    // Presets G, Max, P
+    fireEvent.click(screen.getByRole("button", { name: "G" }));
+    expect(container).toHaveStyle({ height: "440px" });
+    expect(localStorage.getItem("pc_media_touchpad_height")).toBe("440");
+
+    fireEvent.click(screen.getByRole("button", { name: "Max" }));
+    expect(container).toHaveStyle({ height: "560px" });
+
+    fireEvent.click(screen.getByRole("button", { name: "P" }));
+    expect(container).toHaveStyle({ height: "220px" });
+
+    // Drag resize handle (+110px -> 330px)
+    const handle = screen.getByRole("separator", { name: "Redimensionar altura do touchpad" });
+    fireEvent.touchStart(handle, { touches: [{ clientX: 100, clientY: 200 }] });
+    fireEvent.touchMove(handle, { touches: [{ clientX: 100, clientY: 310 }] });
+    fireEvent.touchEnd(handle, { touches: [] });
+
+    expect(container).toHaveStyle({ height: "330px" });
+    expect(localStorage.getItem("pc_media_touchpad_height")).toBe("330");
+  });
 });
