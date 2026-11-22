@@ -44,20 +44,24 @@ export function SessionSheet({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 backdrop-blur-[2px]"
+      className="fixed inset-0 z-50 flex items-end justify-center overscroll-contain backdrop-blur-sm"
+      style={{ backgroundColor: "var(--sheet-backdrop)" }}
       role="dialog"
       aria-modal="true"
       aria-label="Sessões de mídia disponíveis"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-[430px] rounded-t-[28px] p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] shadow-xl"
+        className="w-full max-w-[430px] rounded-t-[28px] px-5 pt-2.5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] shadow-xl"
         style={{
           backgroundColor: "var(--surface)",
-          borderTop: "1px solid var(--separator)",
+          borderTop: "1px solid var(--hairline)",
+          boxShadow: "var(--shadow-card)",
         }}
         onClick={(e) => e.stopPropagation()}
       >
+        <div className="mx-auto mb-3 h-1 w-9 rounded-full" style={{ backgroundColor: "var(--separator)" }} aria-hidden="true" />
+
         <div className="mb-3 flex items-center justify-between gap-2">
           <div>
             <h2 className="text-lg font-semibold" style={{ color: "var(--text)" }}>
@@ -74,6 +78,7 @@ export function SessionSheet({
             className="touch-btn flex h-11 w-11 items-center justify-center rounded-full"
             style={{
               backgroundColor: "var(--surface-elevated)",
+              border: "1px solid var(--hairline)",
               color: "var(--text)",
             }}
           >
@@ -81,7 +86,7 @@ export function SessionSheet({
           </button>
         </div>
 
-        <div className="max-h-[56dvh] space-y-2.5 overflow-y-auto pr-0.5">
+        <div className="max-h-[56dvh] space-y-2.5 overflow-y-auto overscroll-contain pr-0.5">
           {sortedSessions.length === 0 ? (
             <p className="py-6 text-center text-sm" style={{ color: "var(--text-secondary)" }}>
               Nenhuma sessão ativa detectada no momento.
@@ -103,16 +108,19 @@ export function SessionSheet({
                     onSelect(s.id);
                     onClose();
                   }}
-                  className="touch-btn flex w-full items-center gap-3 rounded-2xl p-3 text-left transition-all"
+                  className="touch-btn flex w-full items-center gap-3 rounded-2xl p-3 text-left"
                   style={{
                     backgroundColor: selected ? "var(--accent-soft)" : "var(--surface-elevated)",
-                    border: selected ? "1px solid var(--accent)" : "1px solid transparent",
+                    border: selected ? "1px solid var(--accent)" : "1px solid var(--hairline)",
                   }}
                 >
                   {thumb ? (
                     <img
                       src={thumb}
                       alt=""
+                      width={48}
+                      height={48}
+                      decoding="async"
                       className="h-12 w-12 shrink-0 rounded-xl object-cover"
                     />
                   ) : (
@@ -120,6 +128,7 @@ export function SessionSheet({
                       className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl"
                       style={{
                         backgroundColor: "var(--surface)",
+                        border: "1px solid var(--hairline)",
                         color: "var(--text-secondary)",
                       }}
                     >
@@ -128,7 +137,7 @@ export function SessionSheet({
                   )}
 
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center justify-between gap-1">
+                    <div className="flex items-center justify-between gap-2">
                       <p
                         className="truncate text-sm font-semibold leading-tight"
                         style={{ color: "var(--text)" }}
@@ -155,7 +164,7 @@ export function SessionSheet({
                         </div>
                       ) : (
                         <span
-                          className="shrink-0 text-[11px] font-medium"
+                          className="shrink-0 text-xs font-medium"
                           style={{ color: "var(--text-secondary)" }}
                         >
                           Pausado
@@ -165,7 +174,7 @@ export function SessionSheet({
 
                     <p className="mt-0.5 truncate text-xs" style={{ color: "var(--text-secondary)" }}>
                       <span>{channelSubtitle}</span>
-                      <span className="opacity-60 font-normal"> • {appLabel}</span>
+                      <span className="font-normal"> • {appLabel}</span>
                     </p>
                   </div>
 
@@ -195,6 +204,7 @@ export function SessionSheet({
           className="touch-btn mt-3 flex w-full items-center justify-center rounded-2xl px-4 text-sm font-medium"
           style={{
             backgroundColor: "var(--surface-elevated)",
+            border: "1px solid var(--hairline)",
             color: "var(--text)",
           }}
         >

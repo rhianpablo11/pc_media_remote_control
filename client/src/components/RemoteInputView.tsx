@@ -539,12 +539,13 @@ export function RemoteInputView({
 
   if (!remoteInputEnabled) {
     return (
-      <div className="flex flex-col gap-4">
-        <section className="card-surface flex flex-col items-center p-6 text-center shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
+      <div className="flex flex-col gap-3.5">
+        <section className="card-surface flex flex-col items-center p-6 text-center">
           <div
-            className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl"
+            className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border"
             style={{
               backgroundColor: "var(--surface-elevated)",
+              borderColor: "var(--hairline)",
               color: "var(--text-secondary)",
             }}
           >
@@ -553,7 +554,7 @@ export function RemoteInputView({
           <h2 className="text-lg font-semibold" style={{ color: "var(--text)" }}>
             Mouse e teclado desativados
           </h2>
-          <p className="mt-1.5 max-w-[32ch] text-sm" style={{ color: "var(--text-secondary)" }}>
+          <p className="mt-1.5 max-w-[32ch] text-sm text-pretty" style={{ color: "var(--text-secondary)" }}>
             Por segurança, o controle remoto de cursor e teclado começa desligado. Ative abaixo ou
             no ícone da bandeja do Windows.
           </p>
@@ -578,7 +579,7 @@ export function RemoteInputView({
                 style={{
                   backgroundColor: "var(--surface-elevated)",
                   color: "var(--text)",
-                  border: "1px solid var(--separator)",
+                  border: "1px solid var(--hairline)",
                 }}
               >
                 Ir para Configurações
@@ -591,15 +592,15 @@ export function RemoteInputView({
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-3.5">
       {/* 1. Touchpad card */}
-      <section className="card-surface p-4 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
+      <section className="card-surface p-3.5 min-[360px]:p-4">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-1.5">
             <span
               className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold"
               style={{
-                backgroundColor: "var(--surface-elevated)",
+                backgroundColor: "var(--ok-soft)",
                 color: "var(--ok)",
               }}
             >
@@ -612,10 +613,13 @@ export function RemoteInputView({
             </span>
 
             <div
-              className="inline-flex rounded-xl p-0.5"
+              className="inline-flex rounded-xl border p-0.5"
               role="group"
               aria-label="Sensibilidade do touchpad"
-              style={{ backgroundColor: "var(--surface-elevated)" }}
+              style={{
+                backgroundColor: "var(--surface-elevated)",
+                borderColor: "var(--hairline)",
+              }}
             >
               {SENSITIVITY_OPTIONS.map((opt) => {
                 const selected = sensitivity === opt.value;
@@ -624,10 +628,11 @@ export function RemoteInputView({
                     key={opt.value}
                     type="button"
                     onClick={() => handleSensitivityChange(opt.value)}
-                    className="rounded-lg px-2 py-1 text-[11px] font-semibold"
+                    className="rounded-lg px-2 py-1 text-xs font-semibold tabular-nums whitespace-nowrap"
                     style={{
                       backgroundColor: selected ? "var(--surface)" : "transparent",
-                      color: selected ? "var(--accent)" : "var(--text-secondary)",
+                      color: selected ? "var(--accent-text)" : "var(--text-secondary)",
+                      boxShadow: selected ? "var(--shadow-pill)" : "none",
                     }}
                   >
                     {opt.label}
@@ -637,10 +642,13 @@ export function RemoteInputView({
             </div>
 
             <div
-              className="inline-flex rounded-xl p-0.5"
+              className="inline-flex rounded-xl border p-0.5"
               role="group"
               aria-label="Tamanho do touchpad"
-              style={{ backgroundColor: "var(--surface-elevated)" }}
+              style={{
+                backgroundColor: "var(--surface-elevated)",
+                borderColor: "var(--hairline)",
+              }}
             >
               {PAD_SIZE_PRESETS.map((preset) => {
                 const selected = Math.abs(padHeight - preset.height) <= 12;
@@ -649,10 +657,11 @@ export function RemoteInputView({
                     key={preset.label}
                     type="button"
                     onClick={() => handleSizePreset(preset.height)}
-                    className="rounded-lg px-2 py-1 text-[11px] font-semibold"
+                    className="rounded-lg px-2 py-1 text-xs font-semibold whitespace-nowrap"
                     style={{
                       backgroundColor: selected ? "var(--surface)" : "transparent",
-                      color: selected ? "var(--accent)" : "var(--text-secondary)",
+                      color: selected ? "var(--accent-text)" : "var(--text-secondary)",
+                      boxShadow: selected ? "var(--shadow-pill)" : "none",
                     }}
                   >
                     {preset.label}
@@ -665,9 +674,10 @@ export function RemoteInputView({
           <button
             type="button"
             onClick={() => onSetRemoteInputEnabled(false)}
-            className="touch-btn rounded-xl px-3 py-1.5 text-xs font-semibold"
+            className="touch-btn rounded-xl px-3 py-1.5 text-xs font-semibold whitespace-nowrap"
             style={{
               backgroundColor: "var(--surface-elevated)",
+              border: "1px solid var(--hairline)",
               color: "var(--danger)",
             }}
           >
@@ -678,9 +688,8 @@ export function RemoteInputView({
         {/* Touchpad + Vertical Scroll Strip */}
         <div
           data-testid="touchpad-container"
-          className="flex overflow-hidden rounded-[22px]"
+          className="trackpad-surface flex overflow-hidden rounded-[18px]"
           style={{
-            backgroundColor: "var(--surface-elevated)",
             border: "1px solid var(--separator)",
             height: `${padHeight}px`,
           }}
@@ -701,7 +710,7 @@ export function RemoteInputView({
             <span className="text-xs font-semibold" style={{ color: "var(--text-secondary)" }}>
               Arraste com 1 dedo para mover o cursor
             </span>
-            <span className="mt-1 text-[11px]" style={{ color: "var(--text-secondary)" }}>
+            <span className="mt-1 text-xs" style={{ color: "var(--text-secondary)" }}>
               Toque = clique • 2 dedos = rolar ou toque direito
             </span>
           </div>
@@ -713,7 +722,8 @@ export function RemoteInputView({
             aria-valuenow={50}
             className="touch-none select-none flex w-11 shrink-0 flex-col items-center justify-between border-l py-3 text-[10px] font-semibold"
             style={{
-              borderColor: "var(--separator)",
+              backgroundColor: "var(--surface)",
+              borderColor: "var(--hairline)",
               color: "var(--text-secondary)",
             }}
             onTouchStart={onScrollTouchStart}
@@ -725,11 +735,11 @@ export function RemoteInputView({
             onPointerUp={onScrollPointerUp}
             onPointerCancel={onScrollPointerUp}
           >
-            <span>▲</span>
-            <span className="text-[9px] uppercase tracking-wider [writing-mode:vertical-rl]">
+            <span aria-hidden="true">▲</span>
+            <span className="text-[10px] uppercase tracking-wider [writing-mode:vertical-rl]">
               Rolar
             </span>
-            <span>▼</span>
+            <span aria-hidden="true">▼</span>
           </div>
         </div>
 
@@ -741,7 +751,7 @@ export function RemoteInputView({
           aria-valuenow={padHeight}
           aria-valuemin={MIN_PAD_HEIGHT}
           aria-valuemax={MAX_PAD_HEIGHT}
-          className="touch-none select-none mt-1.5 flex h-5 w-full cursor-ns-resize items-center justify-center"
+          className="touch-none select-none mt-1.5 flex h-6 w-full cursor-ns-resize items-center justify-center gap-2"
           onTouchStart={onResizeTouchStart}
           onTouchMove={onResizeTouchMove}
           onTouchEnd={onResizeTouchEnd}
@@ -756,21 +766,20 @@ export function RemoteInputView({
             style={{ backgroundColor: "var(--separator)" }}
             aria-hidden="true"
           />
+          <span className="text-xs font-medium tabular-nums" style={{ color: "var(--text-secondary)" }}>
+            {padHeight}px
+          </span>
         </div>
 
         {/* Mouse Action Buttons */}
-        <div className="mt-2 grid grid-cols-3 gap-2">
+        <div className="mt-1.5 grid grid-cols-3 gap-2">
           <button
             type="button"
             onClick={() => {
               triggerHaptic(8);
               onSendInput({ action: "mouse_click", button: "left" });
             }}
-            className="touch-btn rounded-2xl px-3 text-xs font-semibold"
-            style={{
-              backgroundColor: "var(--surface-elevated)",
-              color: "var(--text)",
-            }}
+            className="touch-key kbd-key rounded-2xl px-2 text-xs font-semibold whitespace-nowrap"
           >
             Clique Esq.
           </button>
@@ -779,9 +788,11 @@ export function RemoteInputView({
             type="button"
             aria-pressed={dragLocked}
             onClick={toggleDragHold}
-            className="touch-btn rounded-2xl px-3 text-xs font-semibold"
+            className="touch-key rounded-2xl px-2 text-xs font-semibold whitespace-nowrap"
             style={{
               backgroundColor: dragLocked ? "var(--accent)" : "var(--surface-elevated)",
+              border: "1px solid var(--hairline)",
+              boxShadow: dragLocked ? "none" : "var(--kbd-bevel)",
               color: dragLocked ? "var(--accent-contrast)" : "var(--text)",
             }}
           >
@@ -794,11 +805,7 @@ export function RemoteInputView({
               triggerHaptic(10);
               onSendInput({ action: "mouse_click", button: "right" });
             }}
-            className="touch-btn rounded-2xl px-3 text-xs font-semibold"
-            style={{
-              backgroundColor: "var(--surface-elevated)",
-              color: "var(--text)",
-            }}
+            className="touch-key kbd-key rounded-2xl px-2 text-xs font-semibold whitespace-nowrap"
           >
             Clique Dir.
           </button>
@@ -806,30 +813,34 @@ export function RemoteInputView({
       </section>
 
       {/* 2. Remote Keyboard card */}
-      <section className="card-surface p-4 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
-        <div className="mb-3 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <KeyboardIcon className="h-4 w-4" style={{ color: "var(--accent)" }} />
-            <h2 className="text-base font-semibold" style={{ color: "var(--text)" }}>
+      <section className="card-surface p-3.5 min-[360px]:p-4">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex shrink-0 items-center gap-2">
+            <KeyboardIcon className="h-4 w-4 shrink-0" style={{ color: "var(--accent-text)" }} />
+            <h2 className="whitespace-nowrap text-base font-semibold" style={{ color: "var(--text)" }}>
               Teclado Remoto
             </h2>
           </div>
 
           <div
-            className="inline-flex rounded-xl p-0.5"
+            className="inline-flex shrink-0 rounded-xl border p-0.5"
             role="radiogroup"
             aria-label="Modo de digitação"
-            style={{ backgroundColor: "var(--surface-elevated)" }}
+            style={{
+              backgroundColor: "var(--surface-elevated)",
+              borderColor: "var(--hairline)",
+            }}
           >
             <button
               type="button"
               role="radio"
               aria-checked={keyboardMode === "batch"}
               onClick={() => setKeyboardMode("batch")}
-              className="rounded-lg px-2.5 py-1 text-[11px] font-semibold"
+              className="whitespace-nowrap rounded-lg px-2.5 py-1 text-xs font-semibold"
               style={{
                 backgroundColor: keyboardMode === "batch" ? "var(--surface)" : "transparent",
-                color: keyboardMode === "batch" ? "var(--accent)" : "var(--text-secondary)",
+                color: keyboardMode === "batch" ? "var(--accent-text)" : "var(--text-secondary)",
+                boxShadow: keyboardMode === "batch" ? "var(--shadow-pill)" : "none",
               }}
             >
               Enviar texto
@@ -843,10 +854,11 @@ export function RemoteInputView({
                 livePrevRef.current = "";
                 setKeyboardMode("live");
               }}
-              className="rounded-lg px-2.5 py-1 text-[11px] font-semibold"
+              className="whitespace-nowrap rounded-lg px-2.5 py-1 text-xs font-semibold"
               style={{
                 backgroundColor: keyboardMode === "live" ? "var(--surface)" : "transparent",
-                color: keyboardMode === "live" ? "var(--accent)" : "var(--text-secondary)",
+                color: keyboardMode === "live" ? "var(--accent-text)" : "var(--text-secondary)",
+                boxShadow: keyboardMode === "live" ? "var(--shadow-pill)" : "none",
               }}
             >
               Tempo real
@@ -855,28 +867,21 @@ export function RemoteInputView({
         </div>
 
         {keyboardMode === "batch" ? (
-          <form onSubmit={handleBatchSubmit} className="flex gap-2">
+          <form onSubmit={handleBatchSubmit} className="flex gap-1.5 min-[360px]:gap-2">
             <input
               type="text"
+              name="remote-batch-text"
+              autoComplete="off"
               value={batchText}
               onChange={(e) => setBatchText(e.target.value)}
-              placeholder="Digite aqui para enviar ao PC..."
+              placeholder="Digite para o PC..."
               aria-label="Digitar texto para o PC"
-              className="min-h-[44px] min-w-0 flex-1 rounded-2xl px-3.5 text-sm outline-none"
-              style={{
-                backgroundColor: "var(--surface-elevated)",
-                color: "var(--text)",
-                border: "1px solid var(--separator)",
-              }}
+              className="field-input min-h-[44px] min-w-0 flex-1 rounded-2xl px-3 min-[360px]:px-3.5 text-sm"
             />
             <button
               type="submit"
               disabled={!batchText}
-              className="touch-btn shrink-0 rounded-2xl px-3.5 text-xs font-semibold disabled:opacity-40"
-              style={{
-                backgroundColor: "var(--accent)",
-                color: "var(--accent-contrast)",
-              }}
+              className="touch-btn btn-primary shrink-0 rounded-2xl px-3 min-[360px]:px-3.5 text-xs font-semibold"
             >
               Enviar
             </button>
@@ -885,20 +890,17 @@ export function RemoteInputView({
               onClick={handleBatchSendEnter}
               aria-label="Enviar texto e apertar Enter"
               title="Enviar + Enter"
-              className="touch-btn flex shrink-0 items-center justify-center rounded-2xl px-3 text-xs font-semibold"
-              style={{
-                backgroundColor: "var(--surface-elevated)",
-                color: "var(--text)",
-                border: "1px solid var(--separator)",
-              }}
+              className="touch-btn kbd-key flex shrink-0 items-center justify-center rounded-2xl px-2.5 min-[360px]:px-3 text-xs font-semibold"
             >
-              <EnterKeyIcon className="h-4 w-4" />
+              <EnterKeyIcon className="h-4 w-4 shrink-0" />
             </button>
           </form>
         ) : (
           <div className="flex flex-col gap-1.5">
             <input
               type="text"
+              name="remote-live-text"
+              autoComplete="off"
               value={liveText}
               onChange={(e) => handleLiveChange(e.target.value)}
               onKeyDown={handleLiveKeyDown}
@@ -909,16 +911,11 @@ export function RemoteInputView({
                 liveComposingRef.current = false;
                 applyLiveDiff(e.currentTarget.value);
               }}
-              placeholder="Digite em tempo real no PC..."
+              placeholder="Digite em tempo real..."
               aria-label="Digitar texto para o PC"
-              className="min-h-[44px] w-full rounded-2xl px-3.5 text-sm outline-none"
-              style={{
-                backgroundColor: "var(--surface-elevated)",
-                color: "var(--text)",
-                border: "1px solid var(--separator)",
-              }}
+              className="field-input min-h-[44px] w-full rounded-2xl px-3.5 text-sm"
             />
-            <span className="text-[11px]" style={{ color: "var(--text-secondary)" }}>
+            <span className="text-xs" style={{ color: "var(--text-secondary)" }}>
               Cada caractere ou Enter é enviado imediatamente ao computador.
             </span>
           </div>
@@ -926,20 +923,18 @@ export function RemoteInputView({
 
         {/* Quick Special Keys & Shortcuts */}
         <div className="mt-3 flex flex-col gap-2">
-          <div className="grid grid-cols-4 gap-2">
+          <div className="grid grid-cols-4 gap-1.5 min-[360px]:gap-2">
             <button
               type="button"
               onClick={() => sendSpecialKey("escape")}
-              className="touch-btn rounded-2xl px-2 text-xs font-semibold"
-              style={{ backgroundColor: "var(--surface-elevated)", color: "var(--text)" }}
+              className="touch-key kbd-key rounded-2xl px-1.5 text-xs font-semibold whitespace-nowrap"
             >
               Esc
             </button>
             <button
               type="button"
               onClick={() => sendSpecialKey("tab")}
-              className="touch-btn rounded-2xl px-2 text-xs font-semibold"
-              style={{ backgroundColor: "var(--surface-elevated)", color: "var(--text)" }}
+              className="touch-key kbd-key rounded-2xl px-1.5 text-xs font-semibold whitespace-nowrap"
             >
               Tab
             </button>
@@ -947,65 +942,63 @@ export function RemoteInputView({
               type="button"
               aria-label="Apagar"
               onClick={() => sendSpecialKey("backspace")}
-              className="touch-btn flex items-center justify-center rounded-2xl px-2 text-xs font-semibold"
-              style={{ backgroundColor: "var(--surface-elevated)", color: "var(--text)" }}
+              className="touch-key kbd-key flex items-center justify-center rounded-2xl px-1.5 text-xs font-semibold"
             >
-              <BackspaceIcon className="h-4 w-4" />
+              <BackspaceIcon className="h-4 w-4 shrink-0" />
             </button>
             <button
               type="button"
               aria-label="Enter"
               onClick={() => sendSpecialKey("enter")}
-              className="touch-btn flex items-center justify-center gap-1 rounded-2xl px-2 text-xs font-semibold"
-              style={{ backgroundColor: "var(--accent-soft)", color: "var(--accent)" }}
+              className="touch-key flex items-center justify-center gap-1 rounded-2xl border px-1.5 text-[11px] min-[360px]:text-xs font-semibold whitespace-nowrap"
+              style={{
+                backgroundColor: "var(--accent-soft)",
+                borderColor: "var(--hairline)",
+                color: "var(--accent-text)",
+              }}
             >
-              <EnterKeyIcon className="h-4 w-4" />
+              <EnterKeyIcon className="h-3.5 w-3.5 shrink-0" />
               <span>Enter</span>
             </button>
           </div>
 
-          <div className="grid grid-cols-5 gap-2">
+          <div className="grid grid-cols-5 gap-1.5 min-[360px]:gap-2">
             <button
               type="button"
               aria-label="Seta esquerda"
               onClick={() => sendSpecialKey("left")}
-              className="touch-btn flex items-center justify-center rounded-2xl"
-              style={{ backgroundColor: "var(--surface-elevated)", color: "var(--text)" }}
+              className="touch-key kbd-key flex items-center justify-center rounded-2xl"
             >
-              <ArrowLeftIcon className="h-4 w-4" />
+              <ArrowLeftIcon className="h-4 w-4 shrink-0" />
             </button>
             <button
               type="button"
               aria-label="Seta cima"
               onClick={() => sendSpecialKey("up")}
-              className="touch-btn flex items-center justify-center rounded-2xl"
-              style={{ backgroundColor: "var(--surface-elevated)", color: "var(--text)" }}
+              className="touch-key kbd-key flex items-center justify-center rounded-2xl"
             >
-              <ArrowUpIcon className="h-4 w-4" />
+              <ArrowUpIcon className="h-4 w-4 shrink-0" />
             </button>
             <button
               type="button"
               aria-label="Seta baixo"
               onClick={() => sendSpecialKey("down")}
-              className="touch-btn flex items-center justify-center rounded-2xl"
-              style={{ backgroundColor: "var(--surface-elevated)", color: "var(--text)" }}
+              className="touch-key kbd-key flex items-center justify-center rounded-2xl"
             >
-              <ArrowDownIcon className="h-4 w-4" />
+              <ArrowDownIcon className="h-4 w-4 shrink-0" />
             </button>
             <button
               type="button"
               aria-label="Seta direita"
               onClick={() => sendSpecialKey("right")}
-              className="touch-btn flex items-center justify-center rounded-2xl"
-              style={{ backgroundColor: "var(--surface-elevated)", color: "var(--text)" }}
+              className="touch-key kbd-key flex items-center justify-center rounded-2xl"
             >
-              <ArrowRightIcon className="h-4 w-4" />
+              <ArrowRightIcon className="h-4 w-4 shrink-0" />
             </button>
             <button
               type="button"
               onClick={() => sendSpecialKey("space")}
-              className="touch-btn rounded-2xl px-1 text-[11px] font-semibold"
-              style={{ backgroundColor: "var(--surface-elevated)", color: "var(--text)" }}
+              className="touch-key kbd-key rounded-2xl px-1 text-[11px] min-[360px]:text-xs font-semibold whitespace-nowrap truncate"
             >
               Espaço
             </button>
@@ -1015,8 +1008,7 @@ export function RemoteInputView({
             <button
               type="button"
               onClick={() => sendSpecialKey("tab", ["alt"])}
-              className="touch-btn rounded-xl px-1 text-[11px] font-semibold"
-              style={{ backgroundColor: "var(--surface-elevated)", color: "var(--text)" }}
+              className="touch-key kbd-key rounded-xl px-1 text-[10px] min-[360px]:text-xs font-semibold whitespace-nowrap truncate"
             >
               Alt+Tab
             </button>
@@ -1024,32 +1016,28 @@ export function RemoteInputView({
               type="button"
               onClick={() => sendSpecialKey("f")}
               aria-label="Tecla F tela cheia"
-              className="touch-btn rounded-xl px-1 text-[11px] font-semibold"
-              style={{ backgroundColor: "var(--surface-elevated)", color: "var(--text)" }}
+              className="touch-key kbd-key rounded-xl px-1 text-[10px] min-[360px]:text-xs font-semibold whitespace-nowrap truncate"
             >
               Tela (F)
             </button>
             <button
               type="button"
               onClick={() => sendSpecialKey("c", ["ctrl"])}
-              className="touch-btn rounded-xl px-1 text-[11px] font-semibold"
-              style={{ backgroundColor: "var(--surface-elevated)", color: "var(--text)" }}
+              className="touch-key kbd-key rounded-xl px-1 text-[10px] min-[360px]:text-xs font-semibold whitespace-nowrap truncate"
             >
               Copiar
             </button>
             <button
               type="button"
               onClick={() => sendSpecialKey("v", ["ctrl"])}
-              className="touch-btn rounded-xl px-1 text-[11px] font-semibold"
-              style={{ backgroundColor: "var(--surface-elevated)", color: "var(--text)" }}
+              className="touch-key kbd-key rounded-xl px-1 text-[10px] min-[360px]:text-xs font-semibold whitespace-nowrap truncate"
             >
               Colar
             </button>
             <button
               type="button"
               onClick={() => sendSpecialKey("win")}
-              className="touch-btn rounded-xl px-1 text-[11px] font-semibold"
-              style={{ backgroundColor: "var(--surface-elevated)", color: "var(--text)" }}
+              className="touch-key kbd-key rounded-xl px-1 text-[10px] min-[360px]:text-xs font-semibold whitespace-nowrap truncate"
             >
               Win
             </button>

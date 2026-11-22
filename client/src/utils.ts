@@ -80,6 +80,23 @@ export function applyThemeMode(mode: ThemeMode): void {
   }
   if (typeof document !== "undefined") {
     document.documentElement.dataset.theme = mode;
+
+    const prefersDark =
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-color-scheme: dark)").matches;
+    const isDark = mode === "dark" || (mode === "auto" && prefersDark);
+    const themeColor = isDark ? "#08080a" : "#f5f5f7";
+
+    const metas = document.querySelectorAll('meta[name="theme-color"]');
+    metas.forEach((meta) => {
+      if (mode === "auto") {
+        const media = meta.getAttribute("media") || "";
+        meta.setAttribute("content", media.includes("dark") ? "#08080a" : "#f5f5f7");
+      } else {
+        meta.setAttribute("content", themeColor);
+      }
+    });
   }
 }
 

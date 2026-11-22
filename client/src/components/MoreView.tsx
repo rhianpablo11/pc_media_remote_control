@@ -81,9 +81,9 @@ export function MoreView({
           : "Não pareado";
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-3.5">
       {/* 1. Abrir link no Chrome */}
-      <section className="card-surface p-5 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
+      <section className="card-surface p-5">
         <h2 className="mb-3 text-base font-semibold" style={{ color: "var(--text)" }}>
           Abrir link no Chrome
         </h2>
@@ -91,17 +91,16 @@ export function MoreView({
         <form onSubmit={submitUrl} className="flex gap-2">
           <input
             type="url"
+            name="open-url"
+            inputMode="url"
+            autoComplete="off"
+            spellCheck={false}
             value={openUrl}
             onChange={(e) => setOpenUrl(e.target.value)}
             placeholder="Colar link"
             aria-label="Colar link"
             disabled={!extensionConnected}
-            className="min-h-[44px] min-w-0 flex-1 rounded-2xl px-3.5 text-sm outline-none disabled:opacity-50"
-            style={{
-              backgroundColor: "var(--surface-elevated)",
-              color: "var(--text)",
-              border: "1px solid var(--separator)",
-            }}
+            className="field-input min-h-[44px] min-w-0 flex-1 rounded-2xl px-3.5 text-sm disabled:opacity-50"
           />
           <button
             type="submit"
@@ -109,8 +108,8 @@ export function MoreView({
             className="touch-btn shrink-0 rounded-2xl px-4 text-sm font-semibold disabled:opacity-40"
             style={{
               backgroundColor: "var(--surface-elevated)",
+              border: "1px solid var(--hairline)",
               color: "var(--text)",
-              border: "1px solid var(--separator)",
             }}
           >
             Abrir
@@ -119,7 +118,7 @@ export function MoreView({
       </section>
 
       {/* 2. Teclas globais de mídia (Fallback VLC / players sem GSMTC) */}
-      <section className="card-surface p-5 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
+      <section className="card-surface p-5">
         <h2 className="text-base font-semibold" style={{ color: "var(--text)" }}>
           Teclas globais de mídia
         </h2>
@@ -130,11 +129,7 @@ export function MoreView({
           <button
             type="button"
             onClick={() => onCommand("windows:fallback", "previous")}
-            className="touch-btn flex items-center justify-center gap-1.5 rounded-2xl px-3 text-xs font-semibold"
-            style={{
-              backgroundColor: "var(--surface-elevated)",
-              color: "var(--text)",
-            }}
+            className="touch-btn kbd-key flex items-center justify-center gap-1.5 rounded-2xl px-3 text-xs font-semibold"
           >
             <PreviousIcon className="h-4 w-4" />
             <span>Anterior</span>
@@ -143,6 +138,7 @@ export function MoreView({
           <button
             type="button"
             onClick={() => onCommand("windows:fallback", "toggle")}
+            aria-label="Reproduzir ou pausar fallback"
             className="touch-btn flex items-center justify-center gap-1 rounded-2xl px-3 text-xs font-semibold"
             style={{
               backgroundColor: "var(--accent)",
@@ -156,11 +152,7 @@ export function MoreView({
           <button
             type="button"
             onClick={() => onCommand("windows:fallback", "next")}
-            className="touch-btn flex items-center justify-center gap-1.5 rounded-2xl px-3 text-xs font-semibold"
-            style={{
-              backgroundColor: "var(--surface-elevated)",
-              color: "var(--text)",
-            }}
+            className="touch-btn kbd-key flex items-center justify-center gap-1.5 rounded-2xl px-3 text-xs font-semibold"
           >
             <span>Próximo</span>
             <NextIcon className="h-4 w-4" />
@@ -170,16 +162,16 @@ export function MoreView({
 
       {/* 3.0 Segurança: Mouse e Teclado Remoto */}
       {onSetRemoteInputEnabled ? (
-        <section className="card-surface flex items-center justify-between gap-3 p-5 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
+        <section className="card-surface flex items-center justify-between gap-3 p-5">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <h2 className="text-base font-semibold" style={{ color: "var(--text)" }}>
                 Mouse e Teclado Remoto
               </h2>
               <span
-                className="rounded-full px-2 py-0.5 text-[11px] font-semibold"
+                className="rounded-full px-2 py-0.5 text-xs font-semibold"
                 style={{
-                  backgroundColor: "var(--surface-elevated)",
+                  backgroundColor: remoteInputEnabled ? "var(--ok-soft)" : "var(--surface-elevated)",
                   color: remoteInputEnabled ? "var(--ok)" : "var(--text-secondary)",
                 }}
               >
@@ -196,24 +188,13 @@ export function MoreView({
             aria-checked={remoteInputEnabled}
             aria-label="Ativar mouse e teclado remoto"
             onClick={() => onSetRemoteInputEnabled(!remoteInputEnabled)}
-            className="touch-btn relative inline-flex h-7 w-12 shrink-0 items-center rounded-full px-1 transition-colors"
-            style={{
-              backgroundColor: remoteInputEnabled ? "var(--accent)" : "var(--separator)",
-              minHeight: "28px",
-            }}
-          >
-            <span
-              className="inline-block h-5 w-5 rounded-full bg-white shadow transition-transform"
-              style={{
-                transform: remoteInputEnabled ? "translateX(20px)" : "translateX(0px)",
-              }}
-            />
-          </button>
+            className="ios-switch"
+          />
         </section>
       ) : null}
 
       {/* 3. Conexão com o PC */}
-      <section className="card-surface flex items-center justify-between gap-3 p-5 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
+      <section className="card-surface flex items-center justify-between gap-3 p-5">
         <div className="min-w-0">
           <h2 className="text-base font-semibold" style={{ color: "var(--text)" }}>
             Conexão com o PC
@@ -228,7 +209,8 @@ export function MoreView({
           className="touch-btn shrink-0 rounded-2xl px-4 text-xs font-semibold"
           style={{
             backgroundColor: "var(--surface-elevated)",
-            color: "var(--accent)",
+            border: "1px solid var(--hairline)",
+            color: "var(--accent-text)",
           }}
         >
           Reconectar
@@ -236,15 +218,15 @@ export function MoreView({
       </section>
 
       {/* 3.1 Diagnóstico de Conexão (depuração no mobile sem cabo) */}
-      <section className="card-surface p-5 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
+      <section className="card-surface p-5">
         <div className="mb-2 flex items-center justify-between">
           <h2 className="text-base font-semibold" style={{ color: "var(--text)" }}>
             Diagnóstico de Conexão
           </h2>
           <span
-            className="rounded-full px-2.5 py-0.5 text-[11px] font-semibold"
+            className="rounded-full px-2.5 py-0.5 text-xs font-semibold"
             style={{
-              backgroundColor: "var(--surface-elevated)",
+              backgroundColor: connectionStatus === "connected" ? "var(--ok-soft)" : "var(--surface-elevated)",
               color: connectionStatus === "connected" ? "var(--ok)" : "var(--warn)",
             }}
           >
@@ -256,31 +238,35 @@ export function MoreView({
         </p>
 
         <div
-          className="flex flex-col gap-2 rounded-2xl p-3 text-xs font-mono"
-          style={{ backgroundColor: "var(--surface-elevated)", color: "var(--text)" }}
+          className="flex flex-col gap-2 rounded-2xl border p-3.5 text-xs font-mono tabular-nums"
+          style={{
+            backgroundColor: "var(--surface-elevated)",
+            borderColor: "var(--hairline)",
+            color: "var(--text)",
+          }}
         >
           <div className="flex flex-col">
             <span
-              className="text-[10px] font-bold uppercase tracking-wider"
+              className="text-[11px] font-bold uppercase tracking-wider"
               style={{ color: "var(--text-secondary)" }}
             >
               URL WebSocket
             </span>
             <span className="break-all">{diagnostic?.wsUrl || "—"}</span>
           </div>
-          <div className="flex justify-between border-t border-[var(--separator)] pt-2">
+          <div className="flex justify-between border-t pt-2" style={{ borderColor: "var(--hairline)" }}>
             <span style={{ color: "var(--text-secondary)" }}>Host / Origem:</span>
-            <span className="truncate max-w-[200px] text-right">{diagnostic?.clientHost || (typeof window !== "undefined" ? window.location.host : "—")}</span>
+            <span className="max-w-[200px] truncate text-right">{diagnostic?.clientHost || (typeof window !== "undefined" ? window.location.host : "—")}</span>
           </div>
-          <div className="flex justify-between border-t border-[var(--separator)] pt-2">
+          <div className="flex justify-between border-t pt-2" style={{ borderColor: "var(--hairline)" }}>
             <span style={{ color: "var(--text-secondary)" }}>Ambiente:</span>
             <span>{diagnostic?.isLoopback ? "Loopback (Localhost)" : "Rede Local (LAN)"}</span>
           </div>
-          <div className="flex justify-between border-t border-[var(--separator)] pt-2">
+          <div className="flex justify-between border-t pt-2" style={{ borderColor: "var(--hairline)" }}>
             <span style={{ color: "var(--text-secondary)" }}>Token Autenticação:</span>
             <span>{diagnostic?.hasToken ? "Salvo" : "Ausente"}</span>
           </div>
-          <div className="flex justify-between border-t border-[var(--separator)] pt-2">
+          <div className="flex justify-between border-t pt-2" style={{ borderColor: "var(--hairline)" }}>
             <span style={{ color: "var(--text-secondary)" }}>RTT (Ida + Volta):</span>
             <span>
               {diagnostic?.lastRttMs !== null && diagnostic?.lastRttMs !== undefined
@@ -288,7 +274,7 @@ export function MoreView({
                 : "—"}
             </span>
           </div>
-          <div className="flex justify-between border-t border-[var(--separator)] pt-2">
+          <div className="flex justify-between border-t pt-2" style={{ borderColor: "var(--hairline)" }}>
             <span style={{ color: "var(--text-secondary)" }}>Execução no Host:</span>
             <span>
               {diagnostic?.lastHostExecMs !== null && diagnostic?.lastHostExecMs !== undefined
@@ -296,7 +282,7 @@ export function MoreView({
                 : "—"}
             </span>
           </div>
-          <div className="flex justify-between border-t border-[var(--separator)] pt-2">
+          <div className="flex justify-between border-t pt-2" style={{ borderColor: "var(--hairline)" }}>
             <span style={{ color: "var(--text-secondary)" }}>Rede Wi-Fi estimada:</span>
             <span>
               {diagnostic?.lastNetworkMs !== null && diagnostic?.lastNetworkMs !== undefined
@@ -304,13 +290,13 @@ export function MoreView({
                 : "—"}
             </span>
           </div>
-          <div className="flex justify-between border-t border-[var(--separator)] pt-2">
+          <div className="flex justify-between border-t pt-2" style={{ borderColor: "var(--hairline)" }}>
             <span style={{ color: "var(--text-secondary)" }}>Diagnóstico Gargalo:</span>
-            <span className="truncate max-w-[200px] text-right font-sans">
+            <span className="max-w-[200px] truncate text-right font-sans">
               {diagnostic?.bottleneckSummary || "Normal (<150ms)"}
             </span>
           </div>
-          <div className="flex justify-between border-t border-[var(--separator)] pt-2">
+          <div className="flex justify-between border-t pt-2" style={{ borderColor: "var(--hairline)" }}>
             <span style={{ color: "var(--text-secondary)" }}>Último Fechamento:</span>
             <span>
               {diagnostic?.lastCloseCode !== null && diagnostic?.lastCloseCode !== undefined
@@ -319,14 +305,14 @@ export function MoreView({
             </span>
           </div>
           {diagnostic?.lastCloseTimestamp ? (
-            <div className="flex justify-between border-t border-[var(--separator)] pt-2">
+            <div className="flex justify-between border-t pt-2" style={{ borderColor: "var(--hairline)" }}>
               <span style={{ color: "var(--text-secondary)" }}>Horário Fechamento:</span>
               <span>{diagnostic.lastCloseTimestamp}</span>
             </div>
           ) : null}
           {diagnostic?.lastError ? (
-            <div className="flex flex-col border-t border-[var(--separator)] pt-2 text-[var(--danger)]">
-              <span className="text-[10px] font-bold uppercase tracking-wider">Último Erro do Host:</span>
+            <div className="flex flex-col border-t pt-2" style={{ borderColor: "var(--hairline)", color: "var(--danger)" }}>
+              <span className="text-[11px] font-bold uppercase tracking-wider">Último Erro do Host:</span>
               <span className="break-words font-sans text-xs">{diagnostic.lastError}</span>
             </div>
           ) : null}
@@ -339,7 +325,8 @@ export function MoreView({
             className="touch-btn flex-1 rounded-xl py-2 text-xs font-semibold"
             style={{
               backgroundColor: "var(--surface-elevated)",
-              color: "var(--accent)",
+              border: "1px solid var(--hairline)",
+              color: "var(--accent-text)",
             }}
           >
             Reconectar Socket
@@ -351,6 +338,7 @@ export function MoreView({
               className="touch-btn flex-1 rounded-xl py-2 text-xs font-semibold"
               style={{
                 backgroundColor: "var(--surface-elevated)",
+                border: "1px solid var(--hairline)",
                 color: "var(--danger)",
               }}
             >
@@ -361,7 +349,7 @@ export function MoreView({
       </section>
 
       {/* 4. Dispositivos Pareados */}
-      <section className="card-surface p-5 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
+      <section className="card-surface p-5">
         <div className="mb-2 flex items-center justify-between">
           <h2 className="text-base font-semibold" style={{ color: "var(--text)" }}>
             Dispositivos Pareados
@@ -371,7 +359,7 @@ export function MoreView({
               type="button"
               onClick={onRefreshDevices}
               className="touch-btn rounded-xl px-2.5 py-1 text-xs font-medium"
-              style={{ color: "var(--accent)" }}
+              style={{ color: "var(--accent-text)" }}
             >
               Atualizar
             </button>
@@ -386,14 +374,14 @@ export function MoreView({
             Nenhum outro aparelho registrado.
           </p>
         ) : (
-          <div className="flex flex-col divide-y divide-[var(--separator)]">
+          <div className="flex flex-col divide-y" style={{ borderColor: "var(--hairline)" }}>
             {pairedDevices.map((dev) => (
               <div key={dev.id} className="flex items-center justify-between py-2.5 first:pt-0 last:pb-0">
                 <div className="min-w-0 flex-1 pr-3">
                   <div className="truncate text-sm font-medium" style={{ color: "var(--text)" }}>
                     {dev.name}
                   </div>
-                  <div className="text-[11px]" style={{ color: "var(--text-secondary)" }}>
+                  <div className="text-xs tabular-nums" style={{ color: "var(--text-secondary)" }}>
                     {dev.lastSeenAt ? `Último acesso: ${dev.lastSeenAt.slice(0, 10)}` : "Ativo"}
                   </div>
                 </div>
@@ -402,13 +390,14 @@ export function MoreView({
                     type="button"
                     onClick={() => handleRevoke(dev.id)}
                     disabled={revokingId === dev.id}
-                    className="touch-btn shrink-0 rounded-xl px-3 py-1.5 text-xs font-semibold transition-opacity disabled:opacity-40"
+                    className="touch-btn shrink-0 rounded-xl px-3 py-1.5 text-xs font-semibold disabled:opacity-40"
                     style={{
                       backgroundColor: "var(--surface-elevated)",
+                      border: "1px solid var(--hairline)",
                       color: "var(--danger)",
                     }}
                   >
-                    {revokingId === dev.id ? "Revogando..." : "Revogar"}
+                    {revokingId === dev.id ? "Revogando…" : "Revogar"}
                   </button>
                 ) : null}
               </div>
@@ -418,13 +407,16 @@ export function MoreView({
       </section>
 
       {/* 5. Aparência */}
-      <section className="card-surface p-5 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
+      <section className="card-surface p-5">
         <h2 className="mb-3 text-base font-semibold" style={{ color: "var(--text)" }}>
           Aparência
         </h2>
         <div
-          className="grid grid-cols-3 gap-1.5 rounded-2xl p-1"
-          style={{ backgroundColor: "var(--surface-elevated)" }}
+          className="grid grid-cols-3 gap-1.5 rounded-2xl border p-1"
+          style={{
+            backgroundColor: "var(--surface-elevated)",
+            borderColor: "var(--hairline)",
+          }}
           role="radiogroup"
           aria-label="Tema do aplicativo"
         >
@@ -440,8 +432,8 @@ export function MoreView({
                 className="touch-btn rounded-xl px-2 text-xs font-semibold"
                 style={{
                   backgroundColor: active ? "var(--surface)" : "transparent",
-                  color: active ? "var(--accent)" : "var(--text-secondary)",
-                  boxShadow: active ? "0 1px 3px rgba(0, 0, 0, 0.12)" : "none",
+                  color: active ? "var(--accent-text)" : "var(--text-secondary)",
+                  boxShadow: active ? "var(--shadow-pill)" : "none",
                 }}
               >
                 {opt.label}

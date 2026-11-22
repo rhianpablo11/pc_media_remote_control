@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, type CSSProperties } from "react";
 import { useOptimisticSlider } from "../hooks/useOptimisticSlider";
 import type { AudioSession, MasterVolume, MediaSession } from "../types";
 import { cleanMediaTitle, triggerHaptic } from "../utils";
@@ -102,7 +102,8 @@ function VolumeRow({
           className="touch-btn flex h-11 w-11 shrink-0 items-center justify-center rounded-full"
           style={{
             backgroundColor: isMuted ? "var(--accent-soft)" : "var(--surface-elevated)",
-            color: isMuted ? "var(--accent)" : "var(--text)",
+            border: "1px solid var(--hairline)",
+            color: isMuted ? "var(--accent-text)" : "var(--text)",
           }}
         >
           {isMuted || slider.value === 0 ? (
@@ -120,6 +121,11 @@ function VolumeRow({
           step={0.01}
           disabled={disabled}
           value={slider.value}
+          style={
+            {
+              "--slider-pct": `${isMuted ? 0 : Math.round(slider.value * 100)}%`,
+            } as CSSProperties
+          }
           onPointerDown={slider.onPointerDown}
           onChange={(e) => slider.onChange(Number(e.target.value))}
           onPointerUp={(e) => slider.onPointerUp(Number((e.target as HTMLInputElement).value))}
@@ -169,9 +175,9 @@ export function VolumeView({
   const masterMuted = masterVolume?.muted ?? false;
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-3.5">
       {/* Master Volume */}
-      <section className="card-surface p-5 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
+      <section className="card-surface p-5">
         <div className="mb-2 flex items-center justify-between gap-2">
           <div className="min-w-0">
             <h2 className="text-base font-semibold" style={{ color: "var(--text)" }}>
@@ -201,7 +207,8 @@ export function VolumeView({
             className="touch-btn flex h-11 w-11 shrink-0 items-center justify-center rounded-full"
             style={{
               backgroundColor: masterMuted ? "var(--accent-soft)" : "var(--surface-elevated)",
-              color: masterMuted ? "var(--accent)" : "var(--text)",
+              border: "1px solid var(--hairline)",
+              color: masterMuted ? "var(--accent-text)" : "var(--text)",
             }}
           >
             {masterMuted || masterVal === 0 ? (
@@ -219,6 +226,11 @@ export function VolumeView({
             step={0.01}
             disabled={!masterVolume}
             value={masterVal}
+            style={
+              {
+                "--slider-pct": `${masterMuted ? 0 : Math.round(masterVal * 100)}%`,
+              } as CSSProperties
+            }
             onPointerDown={masterSlider.onPointerDown}
             onChange={(e) => masterSlider.onChange(Number(e.target.value))}
             onPointerUp={(e) =>
@@ -233,7 +245,7 @@ export function VolumeView({
       </section>
 
       {/* Chrome Tabs Volume */}
-      <section className="card-surface p-5 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
+      <section className="card-surface p-5">
         <h2 className="mb-3 text-base font-semibold" style={{ color: "var(--text)" }}>
           Abas do Chrome
         </h2>
@@ -246,7 +258,8 @@ export function VolumeView({
             {chromeSessions.map((tab, idx) => (
               <div
                 key={tab.id}
-                className={idx > 0 ? "pt-4 border-t border-[var(--separator)]/40" : ""}
+                className={idx > 0 ? "border-t pt-4" : ""}
+                style={idx > 0 ? { borderColor: "var(--hairline)" } : undefined}
               >
                 <VolumeRow
                   target={tab.id}
@@ -265,7 +278,7 @@ export function VolumeView({
       </section>
 
       {/* Windows Native Apps Volume */}
-      <section className="card-surface p-5 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
+      <section className="card-surface p-5">
         <h2 className="mb-3 text-base font-semibold" style={{ color: "var(--text)" }}>
           Aplicativos (Windows)
         </h2>
@@ -278,7 +291,8 @@ export function VolumeView({
             {filteredAudioSessions.map((app, idx) => (
               <div
                 key={app.id}
-                className={idx > 0 ? "pt-4 border-t border-[var(--separator)]/40" : ""}
+                className={idx > 0 ? "border-t pt-4" : ""}
+                style={idx > 0 ? { borderColor: "var(--hairline)" } : undefined}
               >
                 <VolumeRow
                   target={app.id}

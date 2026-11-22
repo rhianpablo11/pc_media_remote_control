@@ -122,26 +122,24 @@ export function SearchView({
   };
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-3.5">
       {/* Search Header & Input Card */}
-      <section className="card-surface p-4 sm:p-5 shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
+      <section className="card-surface p-4 sm:p-5">
         <form onSubmit={handleSubmit} className="flex gap-2">
-          <div className="relative flex-1 min-w-0">
+          <div className="relative min-w-0 flex-1">
             <input
               type="search"
+              name="youtube-query"
+              autoComplete="off"
+              enterKeyHint="search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Buscar vídeos no YouTube..."
               aria-label="Buscar vídeos no YouTube"
-              className="w-full min-h-[46px] rounded-2xl pl-10 pr-9 text-sm font-medium outline-none transition-colors"
-              style={{
-                backgroundColor: "var(--surface-elevated)",
-                color: "var(--text)",
-                border: "1px solid var(--separator)",
-              }}
+              className={`field-input min-h-[46px] w-full rounded-2xl pl-10 text-sm font-medium ${query ? "pr-11" : "pr-3.5"}`}
             />
             <SearchIcon
-              className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 opacity-50"
+              className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 opacity-55"
               style={{ color: "var(--text)" }}
             />
             {query ? (
@@ -149,9 +147,10 @@ export function SearchView({
                 type="button"
                 onClick={() => setQuery("")}
                 aria-label="Limpar texto da busca"
-                className="touch-btn absolute right-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full text-xs opacity-60 hover:opacity-100"
+                className="touch-btn absolute right-0.5 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full opacity-70 hover:opacity-100"
+                style={{ color: "var(--text-secondary)" }}
               >
-                <CloseIcon className="h-3.5 w-3.5" />
+                <CloseIcon className="h-4 w-4" />
               </button>
             ) : null}
           </div>
@@ -160,33 +159,35 @@ export function SearchView({
             type="submit"
             aria-label="Pesquisar vídeos"
             disabled={isSearching || !query.trim()}
-            className="touch-btn shrink-0 rounded-2xl px-4 text-sm font-semibold disabled:opacity-40"
-            style={{
-              backgroundColor: "var(--accent)",
-              color: "var(--accent-contrast)",
-            }}
+            className="touch-btn btn-primary shrink-0 rounded-2xl px-4 text-sm font-semibold"
           >
-            {isSearching ? "Buscando..." : "Buscar"}
+            {isSearching ? "Buscando…" : "Buscar"}
           </button>
         </form>
 
         {/* Fullscreen Option Toggle */}
-        <div className="mt-3.5 flex items-center justify-between border-t pt-3" style={{ borderColor: "var(--separator)" }}>
-          <label className="flex items-center gap-2 text-xs font-medium cursor-pointer select-none" style={{ color: "var(--text-secondary)" }}>
+        <div
+          className="mt-3 flex min-h-[44px] items-center justify-between border-t pt-2"
+          style={{ borderColor: "var(--hairline)" }}
+        >
+          <label
+            className="flex min-h-[44px] flex-1 cursor-pointer select-none items-center gap-2.5 text-xs font-medium"
+            style={{ color: "var(--text-secondary)" }}
+          >
             <input
               type="checkbox"
               checked={openFullscreen}
               onChange={(e) => setOpenFullscreen(e.target.checked)}
               className="h-4 w-4 rounded accent-[var(--accent)]"
             />
-            <span className="flex items-center gap-1">
+            <span className="flex items-center gap-1.5">
               <FullscreenIcon className="h-3.5 w-3.5" />
               <span>Abrir vídeo em tela cheia</span>
             </span>
           </label>
 
           {!extensionConnected ? (
-            <span className="text-[11px] font-medium" style={{ color: "var(--warn)" }}>
+            <span className="shrink-0 text-xs font-medium" style={{ color: "var(--warn)" }}>
               Extensão offline
             </span>
           ) : null}
@@ -194,15 +195,15 @@ export function SearchView({
 
         {/* Recent Search History Chips */}
         {history.length > 0 ? (
-          <div className="mt-3.5 border-t pt-3" style={{ borderColor: "var(--separator)" }}>
-            <div className="mb-2 flex items-center justify-between text-xs">
+          <div className="mt-2 border-t pt-2.5" style={{ borderColor: "var(--hairline)" }}>
+            <div className="mb-1.5 flex items-center justify-between text-xs">
               <span className="font-semibold" style={{ color: "var(--text-secondary)" }}>
                 Buscas recentes
               </span>
               <button
                 type="button"
                 onClick={handleClearHistory}
-                className="text-[11px] font-medium hover:underline"
+                className="touch-btn -my-1.5 rounded-lg px-2 text-xs font-medium hover:underline"
                 style={{ color: "var(--text-secondary)" }}
               >
                 Limpar
@@ -214,11 +215,11 @@ export function SearchView({
                   key={item}
                   type="button"
                   onClick={() => handleChipClick(item)}
-                  className="touch-btn inline-flex items-center rounded-full px-3 py-1 text-xs font-medium transition-colors"
+                  className="touch-btn inline-flex items-center rounded-full px-3.5 py-1.5 text-xs font-medium"
                   style={{
                     backgroundColor: "var(--surface-elevated)",
                     color: "var(--text)",
-                    border: "1px solid var(--separator)",
+                    border: "1px solid var(--hairline)",
                   }}
                 >
                   {item}
@@ -231,27 +232,29 @@ export function SearchView({
 
       {/* State: Searching / Loading */}
       {isSearching ? (
-        <section className="card-surface flex flex-col items-center py-14 text-center">
+        <section className="card-surface flex flex-col items-center py-14 text-center" aria-live="polite">
           <div
             className="mb-3 h-8 w-8 animate-spin rounded-full border-2 border-t-transparent"
             style={{
               borderColor: "var(--accent)",
               borderTopColor: "transparent",
             }}
+            aria-hidden="true"
           />
           <p className="text-sm font-medium" style={{ color: "var(--text-secondary)" }}>
-            Buscando vídeos no YouTube...
+            Buscando vídeos no YouTube…
           </p>
         </section>
       ) : null}
 
       {/* State: Error with Graceful Fallback */}
       {!isSearching && lastError ? (
-        <section className="card-surface p-5 text-center shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
+        <section className="card-surface p-5 text-center" role="alert">
           <div
             className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl"
             style={{
-              backgroundColor: "var(--surface-elevated)",
+              backgroundColor: "var(--danger-soft)",
+              border: "1px solid var(--hairline)",
               color: "var(--danger)",
             }}
           >
@@ -260,7 +263,7 @@ export function SearchView({
           <h3 className="text-base font-semibold" style={{ color: "var(--text)" }}>
             Falha na busca
           </h3>
-          <p className="mt-1 text-xs max-w-[32ch] mx-auto" style={{ color: "var(--text-secondary)" }}>
+          <p className="mx-auto mt-1 max-w-[32ch] text-xs text-pretty" style={{ color: "var(--text-secondary)" }}>
             {lastError}
           </p>
           <div className="mt-4 flex justify-center gap-2">
@@ -270,7 +273,8 @@ export function SearchView({
               className="touch-btn rounded-2xl px-4 py-2.5 text-xs font-semibold"
               style={{
                 backgroundColor: "var(--accent-soft)",
-                color: "var(--accent)",
+                border: "1px solid var(--hairline)",
+                color: "var(--accent-text)",
               }}
             >
               Abrir busca no notebook
@@ -282,7 +286,7 @@ export function SearchView({
               style={{
                 backgroundColor: "var(--surface-elevated)",
                 color: "var(--text)",
-                border: "1px solid var(--separator)",
+                border: "1px solid var(--hairline)",
               }}
             >
               Tentar novamente
@@ -293,11 +297,12 @@ export function SearchView({
 
       {/* State: Empty Search Initial State */}
       {!isSearching && !hasSearched && (
-        <section className="card-surface flex flex-col items-center py-12 text-center shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
+        <section className="card-surface flex flex-col items-center px-5 py-12 text-center">
           <div
-            className="mb-3 flex h-14 w-14 items-center justify-center rounded-2xl"
+            className="mb-3 flex h-14 w-14 items-center justify-center rounded-2xl border"
             style={{
               backgroundColor: "var(--surface-elevated)",
+              borderColor: "var(--hairline)",
               color: "var(--text-secondary)",
             }}
           >
@@ -306,7 +311,7 @@ export function SearchView({
           <h3 className="text-base font-semibold" style={{ color: "var(--text)" }}>
             Buscar e Tocar Vídeos
           </h3>
-          <p className="mt-1 max-w-[30ch] text-xs" style={{ color: "var(--text-secondary)" }}>
+          <p className="mt-1.5 max-w-[32ch] text-xs leading-relaxed text-pretty" style={{ color: "var(--text-secondary)" }}>
             Pesquise no YouTube a partir do celular e toque diretamente no computador sem olhar o monitor.
           </p>
         </section>
@@ -314,7 +319,7 @@ export function SearchView({
 
       {/* State: No Results */}
       {!isSearching && hasSearched && !lastError && results.length === 0 && (
-        <section className="card-surface flex flex-col items-center py-10 text-center shadow-[0_4px_20px_rgba(0,0,0,0.04)]">
+        <section className="card-surface flex flex-col items-center px-5 py-10 text-center">
           <p className="text-sm font-semibold" style={{ color: "var(--text)" }}>
             Nenhum vídeo encontrado
           </p>
@@ -324,10 +329,11 @@ export function SearchView({
           <button
             type="button"
             onClick={() => onOpenFallback(query)}
-            className="touch-btn mt-3 rounded-2xl px-3.5 py-1.5 text-xs font-medium"
+            className="touch-btn mt-3 rounded-2xl px-4 py-2 text-xs font-medium"
             style={{
               backgroundColor: "var(--surface-elevated)",
-              color: "var(--accent)",
+              border: "1px solid var(--hairline)",
+              color: "var(--accent-text)",
             }}
           >
             Abrir busca no notebook
@@ -337,9 +343,9 @@ export function SearchView({
 
       {/* State: Results List */}
       {!isSearching && results.length > 0 && (
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-2.5">
           <div className="flex items-center justify-between px-1">
-            <span className="text-xs font-semibold" style={{ color: "var(--text-secondary)" }}>
+            <span className="text-xs font-semibold tabular-nums" style={{ color: "var(--text-secondary)" }}>
               {results.length} resultados encontrados
             </span>
           </div>
@@ -350,18 +356,24 @@ export function SearchView({
             return (
               <article
                 key={video.id}
-                className="card-surface overflow-hidden p-3.5 shadow-[0_4px_16px_rgba(0,0,0,0.03)] transition-all"
+                className="card-surface card-interactive overflow-hidden rounded-[20px] p-3"
               >
                 <div className="flex gap-3">
-                  {/* Video Thumbnail (16:9) */}
+                  {/* Video Thumbnail (16:9), nested 12px radius inside 20px card */}
                   <div
-                    className="relative aspect-video w-32 shrink-0 overflow-hidden rounded-xl bg-black/10"
-                    style={{ backgroundColor: "var(--surface-elevated)" }}
+                    className="relative aspect-video w-32 shrink-0 overflow-hidden rounded-[12px]"
+                    style={{
+                      backgroundColor: "var(--surface-elevated)",
+                      border: "1px solid var(--hairline)",
+                    }}
                   >
                     {video.thumbnail ? (
                       <img
                         src={video.thumbnail}
                         alt={video.title}
+                        width={128}
+                        height={72}
+                        decoding="async"
                         className="h-full w-full object-cover"
                         loading="lazy"
                       />
@@ -373,11 +385,17 @@ export function SearchView({
 
                     {/* Duration / Live Badge */}
                     {video.isLive ? (
-                      <span className="absolute bottom-1.5 right-1.5 rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-bold text-white uppercase tracking-wider">
+                      <span
+                        className="absolute bottom-1.5 right-1.5 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white"
+                        style={{ backgroundColor: "var(--pill-live-bg)" }}
+                      >
                         AO VIVO
                       </span>
                     ) : video.duration ? (
-                      <span className="absolute bottom-1.5 right-1.5 rounded bg-black/80 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                      <span
+                        className="absolute bottom-1.5 right-1.5 rounded px-1.5 py-0.5 text-[11px] font-semibold text-white tabular-nums"
+                        style={{ backgroundColor: "var(--pill-duration-bg)" }}
+                      >
                         {video.duration}
                       </span>
                     ) : null}
@@ -401,7 +419,7 @@ export function SearchView({
                       </p>
                       {video.views ? (
                         <p
-                          className="text-[11px]"
+                          className="truncate text-xs tabular-nums"
                           style={{ color: "var(--text-secondary)" }}
                         >
                           {video.views}
@@ -414,24 +432,24 @@ export function SearchView({
                       <button
                         type="button"
                         onClick={() => handlePlay(video.id, "current_tab")}
-                        className="touch-btn inline-flex items-center gap-1 rounded-xl px-2.5 py-1.5 text-xs font-semibold"
+                        className="touch-btn inline-flex items-center gap-1 rounded-xl px-3 py-1.5 text-xs font-semibold"
                         style={{
                           backgroundColor: isPlayingThis ? "var(--ok)" : "var(--accent)",
                           color: "var(--accent-contrast)",
                         }}
                       >
                         <PlayIcon className="h-3.5 w-3.5" />
-                        <span>{isPlayingThis ? "Tocando..." : "Tocar agora"}</span>
+                        <span>{isPlayingThis ? "Tocando…" : "Tocar agora"}</span>
                       </button>
 
                       <button
                         type="button"
                         onClick={() => handlePlay(video.id, "new_tab")}
-                        className="touch-btn inline-flex items-center rounded-xl px-2.5 py-1.5 text-xs font-medium"
+                        className="touch-btn inline-flex items-center rounded-xl px-3 py-1.5 text-xs font-medium"
                         style={{
                           backgroundColor: "var(--surface-elevated)",
                           color: "var(--text)",
-                          border: "1px solid var(--separator)",
+                          border: "1px solid var(--hairline)",
                         }}
                       >
                         Nova aba
