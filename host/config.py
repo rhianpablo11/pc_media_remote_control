@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import socket
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -105,19 +106,49 @@ def sync_installed_extension() -> Path:
 
         instructions = (
             "======================================================================\n"
-            "PC Media Control — Como carregar a extensao no Google Chrome\n"
+            "PC Media Control — Como instalar a extensao no Google Chrome\n"
             "======================================================================\n\n"
-            "1. Abra o Google Chrome no seu computador.\n"
-            "2. Na barra de enderecos, digite: chrome://extensions e aperte Enter.\n"
-            "3. No canto superior direito, ative a chave 'Modo do desenvolvedor'.\n"
-            "4. Clique no botao 'Carregar sem compactacao' (Load unpacked).\n"
-            f"5. Selecione ESTA PASTA: {target_dir}\n"
-            "6. Pronto! A extensao estara conectada ao PC Media Control de forma\n"
-            "   permanente e nao sera perdida mesmo ao mover ou atualizar o app.\n"
+            "JEITO MAIS RAPIDO (Arrastar e Soltar):\n"
+            "1. Abra o Google Chrome e digite: chrome://extensions\n"
+            "2. No canto superior direito, ative 'Modo do desenvolvedor'.\n"
+            "3. Arraste ESTA PASTA ('extension') direto para dentro da janela\n"
+            "   do Chrome.\n\n"
+            "ALTERNATIVA (colando o caminho com Ctrl+V):\n"
+            "1. Em chrome://extensions com 'Modo do desenvolvedor' ativado,\n"
+            "   clique em 'Carregar sem compactacao' (Load unpacked).\n"
+            f"2. Cole o caminho abaixo (ja copiado pelo app): {target_dir}\n"
             "======================================================================\n"
         )
         (target_dir / "LEIA-ME.txt").write_text(instructions, encoding="utf-8")
 
+    return target_dir
+
+
+def copy_text_to_clipboard(text: str) -> bool:
+    """Copy text to the Windows clipboard using clip.exe (best-effort)."""
+    if sys.platform != "win32":
+        return False
+    try:
+        res = subprocess.run(
+            ["clip.exe"],
+            input=text.encode("utf-16"),
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        return res.returncode == 0
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def open_extension_folder_for_install(ext_dir: Path | None = None) -> Path:
+    """Sync the extension dir, copy its path, and select it in Explorer for drag-and-drop."""
+    target_dir = ext_dir if ext_dir is not None else sync_installed_extension()
+    copy_text_to_clipboard(str(target_dir))
+    try:
+        subprocess.Popen(["explorer.exe", f"/select,{target_dir}"])
+    except Exception:  # noqa: BLE001
+        if hasattr(os, "startfile"):
+            os.startfile(target_dir)
     return target_dir
 
 

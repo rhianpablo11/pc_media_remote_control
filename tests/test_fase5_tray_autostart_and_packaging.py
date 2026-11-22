@@ -231,3 +231,97 @@ def test_autostart_helpers_and_status() -> None:
     assert "PCMediaControl" in str(target_exe.parent)
 
 
+def test_open_extension_folder_for_install_selects_in_explorer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ensure open_extension_folder_for_install copies path and selects it in Explorer."""
+    from host import config as host_config
+
+    ext_dir = tmp_path / "PCMediaControl" / "extension"
+    ext_dir.mkdir(parents=True)
+
+    copied: list[str] = []
+    popen_calls: list[list[str]] = []
+
+    monkeypatch.setattr(
+        host_config,
+        "copy_text_to_clipboard",
+        lambda txt: copied.append(txt) or True,
+    )
+    monkeypatch.setattr(
+        host_config.subprocess,
+        "Popen",
+        lambda args, **_kw: popen_calls.append(list(args)),
+    )
+
+    result = host_config.open_extension_folder_for_install(ext_dir)
+    assert result == ext_dir
+    assert copied == [str(ext_dir)]
+    assert popen_calls == [["explorer.exe", f"/select,{ext_dir}"]]
+
+
+def test_pair_extension_setup_wizard_and_endpoints(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ensure /pair includes the Chrome extension setup card and loopback-only endpoints work."""
+    from fastapi.testclient import TestClient
+
+    from host import app as host_app
+    from host.app import create_app
+    from host.config import DEFAULT_EXTENSION_ID, HostSettings
+    from host.pairing import PairingManager
+
+    fake_ext_dir = tmp_path / "PCMediaControl" / "extension"
+    fake_ext_dir.mkdir(parents=True)
+    monkeypatch.setattr(host_app, "get_installed_extension_dir", lambda: fake_ext_dir)
+
+    opened_calls: list[str] = []
+
+    def _fake_open_ext() -> Path:
+        opened_calls.append(str(fake_ext_dir))
+        return fake_ext_dir
+
+    monkeypatch.setattr(host_app, "open_extension_folder_for_install", _fake_open_ext)
+
+    app = create_app(
+        settings=HostSettings(port=8765, host="127.0.0.1", lan_mode=False),
+        pairing_manager=PairingManager(storage_path=tmp_path / "devices.json"),
+    )
+
+    loopback_client = TestClient(app)
+    non_loop_client = TestClient(app, client=("192.168.1.99", 54321))
+
+    # 1. GET /pair includes the interactive extension section and badge
+    r_pair = loopback_client.get("/pair")
+    assert r_pair.status_code == 200
+    assert 'id="extensao"' in r_pair.text
+    assert "chrome://extensions" in r_pair.text
+    assert "ext-status-badge" in r_pair.text
+
+    # 2. GET /api/extension/status allowed on loopback, blocked on LAN
+    r_status = loopback_client.get("/api/extension/status")
+    assert r_status.status_code == 200
+    assert r_status.json() == {
+        "connected": False,
+        "extensionId": DEFAULT_EXTENSION_ID,
+        "extensionDir": str(fake_ext_dir),
+    }
+    assert non_loop_client.get("/api/extension/status").status_code == 403
+
+    # 3. POST /pair/open-extension-dir supports fetch JSON, 303 redirect, and rejects LAN
+    r_open_fetch = loopback_client.post(
+        "/pair/open-extension-dir",
+        headers={"X-Requested-With": "fetch"},
+    )
+    assert r_open_fetch.status_code == 200
+    assert r_open_fetch.json() == {"ok": True, "extensionDir": str(fake_ext_dir)}
+
+    r_open_form = loopback_client.post("/pair/open-extension-dir", follow_redirects=False)
+    assert r_open_form.status_code == 303
+    assert r_open_form.headers.get("location") == "/pair#extensao"
+    assert len(opened_calls) == 2
+
+    assert non_loop_client.post("/pair/open-extension-dir").status_code == 403
+
+
+

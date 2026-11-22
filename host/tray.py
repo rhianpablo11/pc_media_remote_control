@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 from PIL import Image, ImageDraw
 
 from host.autostart import get_autostart_status, set_autostart
-from host.config import get_base_dir, get_logs_dir, sync_installed_extension
+from host.config import get_base_dir, get_logs_dir, open_extension_folder_for_install
 
 if TYPE_CHECKING:
     from host.config import HostSettings
@@ -83,12 +83,12 @@ class SystemTrayApp:
             logger.warning("Erro ao abrir pasta de logs: %s", exc)
 
     def _open_extension_dir(self) -> None:
-        """Sincroniza e abre a pasta da extensão no Windows Explorer com o LEIA-ME."""
-        ext_dir = sync_installed_extension()
+        """Sincroniza, destaca a pasta no Explorer (arrastar e soltar) e abre o guia no Chrome."""
         try:
-            os.startfile(ext_dir)
+            open_extension_folder_for_install()
         except Exception as exc:  # noqa: BLE001
             logger.warning("Erro ao abrir pasta da extensão: %s", exc)
+        self._open_url("/pair#extensao")
 
     def _get_autostart_label(self) -> str:
         status = get_autostart_status()

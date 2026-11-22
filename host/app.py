@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import html
 import json
 import logging
 from collections import defaultdict
@@ -15,7 +16,13 @@ from urllib.parse import parse_qs
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 
-from host.config import HostConfigStore, HostSettings, normalize_origin
+from host.config import (
+    HostConfigStore,
+    HostSettings,
+    get_installed_extension_dir,
+    normalize_origin,
+    open_extension_folder_for_install,
+)
 from host.input_control import WindowsInputProvider
 from host.network import MdnsPublisher
 from host.pairing import (
@@ -260,13 +267,25 @@ def create_app(
         pairing_url = f"http://{lan_ip}:{cfg.port}/?pair={session.code}"
         qr_data_url = render_qr_data_url(pairing_url)
         paired_devices = pairing_mgr.list_devices()
+        ext_dir_raw = str(get_installed_extension_dir())
+        ext_dir_html = html.escape(ext_dir_raw)
+        ext_dir_js = json.dumps(ext_dir_raw)
+        ext_connected = coordinator.extension_connected
+        ext_badge_text = "Conectada" if ext_connected else "Não detectada"
+        ext_badge_bg = "#e6f6ec" if ext_connected else "#fff4e5"
+        ext_badge_color = "#1b7a34" if ext_connected else "#a66300"
+        ext_note_text = (
+            "Extensão conectada com sucesso!"
+            if ext_connected
+            else "Aguardando conexão da extensão no Google Chrome…"
+        )
 
         pin_formatted = f"{session.pin[:3]} {session.pin[3:]}"
         devices_rows = "".join(
             f"""
             <tr>
               <td style="padding: 8px 12px; border-bottom: 1px solid #e5e5ea;">
-                <strong>{d["name"]}</strong>
+                <strong>{html.escape(str(d["name"]))}</strong>
               </td>
               <td style="padding: 8px 12px; border-bottom: 1px solid #e5e5ea; color: #666;">
                 {d["createdAt"][:19].replace("T", " ")}
@@ -308,7 +327,7 @@ def create_app(
     }}
     .card {{
       background: white; border-radius: 20px; padding: 28px;
-      max-width: 480px; width: 100%; box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+      max-width: 520px; width: 100%; box-shadow: 0 4px 20px rgba(0,0,0,0.08);
     }}
     h1 {{ font-size: 22px; margin-top: 0; text-align: center; }}
     .qr-box {{ text-align: center; margin: 20px 0; }}
@@ -323,8 +342,32 @@ def create_app(
       text-align: center; margin-bottom: 20px;
     }}
     .btn {{
-      background: #0066cc; color: white; border: none; padding: 12px 20px;
+      background: #0066cc; color: white; border: none; padding: 12px 16px;
       border-radius: 12px; font-size: 14px; font-weight: 600; cursor: pointer; width: 100%;
+    }}
+    .btn-secondary {{
+      background: #efeff4; color: #1d1d1f; border: 1px solid #d5d5dc;
+      padding: 10px 12px; border-radius: 10px; font-size: 13px; font-weight: 600;
+      cursor: pointer; flex: 1;
+    }}
+    .ext-header {{
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      margin-bottom: 8px;
+    }}
+    .ext-badge {{
+      display: inline-block; padding: 4px 10px; border-radius: 999px;
+      font-size: 12px; font-weight: 700; white-space: nowrap;
+      background: {ext_badge_bg}; color: {ext_badge_color};
+    }}
+    .path-box {{
+      background: #f2f2f7; border: 1px solid #e5e5ea; border-radius: 10px;
+      padding: 10px 12px; font-family: ui-monospace, Consolas, monospace; font-size: 12px;
+      word-break: break-all; color: #1d1d1f; margin: 10px 0;
+    }}
+    .btn-row {{ display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }}
+    .steps {{
+      margin: 12px 0 6px 0; padding-left: 20px; font-size: 13px;
+      color: #444; line-height: 1.55;
     }}
     .revoke-btn {{
       background: #ff3b30; color: white; border: none; padding: 6px 12px;
@@ -365,6 +408,44 @@ def create_app(
 
     <hr style="border: none; border-top: 1px solid #e5e5ea; margin: 28px 0;" />
 
+    <section id="extensao">
+      <div class="ext-header">
+        <h2 style="font-size: 16px; margin: 0;">Extensão do Google Chrome</h2>
+        <span id="ext-status-badge" class="ext-badge">{ext_badge_text}</span>
+      </div>
+      <p style="font-size: 13px; color: #666; margin: 0 0 8px 0;">
+        Desbloqueia controle por aba do YouTube, busca de vídeos, tela cheia e pular anúncios.
+      </p>
+      <div class="path-box" id="ext-dir-path">{ext_dir_html}</div>
+      <form method="POST" action="/pair/open-extension-dir" id="open-ext-form" style="margin: 0;">
+        <button type="submit" class="btn" id="open-ext-btn">
+          Abrir pasta (arrastar para o Chrome)
+        </button>
+      </form>
+      <div class="btn-row">
+        <button type="button" class="btn-secondary" id="copy-path-btn">Copiar caminho</button>
+        <button type="button" class="btn-secondary" id="copy-chrome-url-btn">
+          Copiar chrome://extensions
+        </button>
+      </div>
+      <ol class="steps">
+        <li>Clique em <strong>Abrir pasta (arrastar para o Chrome)</strong> acima.</li>
+        <li>
+          Cole <code>chrome://extensions</code> no Chrome e ative o
+          <strong>Modo do desenvolvedor</strong>.
+        </li>
+        <li>
+          <strong>Arraste a pasta</strong> <code>extension</code> para dentro da aba do Chrome
+          (ou clique em <em>Carregar sem compactação</em> e cole com <code>Ctrl+V</code>).
+        </li>
+      </ol>
+      <p id="ext-status-note" style="font-size: 12px; color: {ext_badge_color}; margin: 8px 0 0 0;">
+        {ext_note_text}
+      </p>
+    </section>
+
+    <hr style="border: none; border-top: 1px solid #e5e5ea; margin: 28px 0;" />
+
     <h2 style="font-size: 16px; margin: 0 0 8px 0;">Dispositivos Autorizados</h2>
     <table>
       <tbody>
@@ -384,9 +465,109 @@ def create_app(
       <button type="submit" class="btn" style="background: #1d1d1f;">{remote_btn_label}</button>
     </form>
   </div>
+  <script>
+    (function () {{
+      var extDir = {ext_dir_js};
+      var openForm = document.getElementById("open-ext-form");
+      var copyPathBtn = document.getElementById("copy-path-btn");
+      var copyChromeBtn = document.getElementById("copy-chrome-url-btn");
+      var badge = document.getElementById("ext-status-badge");
+      var note = document.getElementById("ext-status-note");
+
+      function flashButton(btn, label) {{
+        var prev = btn.textContent;
+        btn.textContent = label;
+        setTimeout(function () {{ btn.textContent = prev; }}, 1500);
+      }}
+
+      function copyText(text, btn) {{
+        if (navigator.clipboard && navigator.clipboard.writeText) {{
+          navigator.clipboard.writeText(text).then(function () {{
+            flashButton(btn, "Copiado!");
+          }}).catch(function () {{}});
+        }}
+      }}
+
+      if (copyPathBtn) {{
+        copyPathBtn.addEventListener("click", function () {{
+          copyText(extDir, copyPathBtn);
+        }});
+      }}
+
+      if (copyChromeBtn) {{
+        copyChromeBtn.addEventListener("click", function () {{
+          copyText("chrome://extensions", copyChromeBtn);
+        }});
+      }}
+
+      if (openForm) {{
+        openForm.addEventListener("submit", function (ev) {{
+          ev.preventDefault();
+          fetch("/pair/open-extension-dir", {{
+            method: "POST",
+            headers: {{ "X-Requested-With": "fetch" }}
+          }}).then(function () {{
+            var openBtn = document.getElementById("open-ext-btn");
+            if (openBtn) flashButton(openBtn, "Pasta aberta e caminho copiado!");
+          }}).catch(function () {{}});
+        }});
+      }}
+
+      function pollExtensionStatus() {{
+        fetch("/api/extension/status")
+          .then(function (res) {{ return res.ok ? res.json() : null; }})
+          .then(function (data) {{
+            if (!data || !badge || !note) return;
+            if (data.connected) {{
+              badge.textContent = "Conectada";
+              badge.style.background = "#e6f6ec";
+              badge.style.color = "#1b7a34";
+              note.textContent = "Extensão conectada com sucesso!";
+              note.style.color = "#1b7a34";
+            }} else {{
+              badge.textContent = "Não detectada";
+              badge.style.background = "#fff4e5";
+              badge.style.color = "#a66300";
+              note.textContent = "Aguardando conexão da extensão no Google Chrome…";
+              note.style.color = "#a66300";
+            }}
+          }})
+          .catch(function () {{}});
+      }}
+
+      setInterval(pollExtensionStatus, 2500);
+    }})();
+  </script>
 </body>
 </html>"""
         return HTMLResponse(html_content)
+
+    @app.get("/api/extension/status")
+    async def extension_status(request: Request) -> JSONResponse:
+        client_host = request.client.host if request.client is not None else ""
+        if not is_loopback_client(client_host):
+            raise HTTPException(status_code=403, detail="Acesso restrito ao computador local.")
+        return JSONResponse(
+            {
+                "connected": coordinator.extension_connected,
+                "extensionId": cfg.extension_id,
+                "extensionDir": str(get_installed_extension_dir()),
+            }
+        )
+
+    @app.post("/pair/open-extension-dir")
+    async def open_extension_dir_endpoint(request: Request) -> Response:
+        client_host = request.client.host if request.client is not None else ""
+        if not is_loopback_client(client_host):
+            raise HTTPException(status_code=403, detail="Acesso restrito ao computador local.")
+        ext_dir = open_extension_folder_for_install()
+        is_fetch = (
+            request.headers.get("x-requested-with") == "fetch"
+            or "application/json" in request.headers.get("accept", "")
+        )
+        if is_fetch:
+            return JSONResponse({"ok": True, "extensionDir": str(ext_dir)})
+        return Response(status_code=303, headers={"Location": "/pair#extensao"})
 
     @app.post("/pair/refresh")
     async def refresh_pairing(request: Request) -> Response:

@@ -1,213 +1,275 @@
 # PC Media Control
 
-Transforme seu notebook ou PC (Windows) numa central de mídia controlada pelo celular via rede local (Wi-Fi), sem necessidade de servidores externos, nuvem ou cadastro de contas.
+Transforme seu PC ou notebook Windows em uma central de mídia controlada diretamente pelo celular na mesma rede Wi-Fi — **100% local**, sem nuvem, sem servidores externos, sem cadastro de contas e sem telemetria.
+
+---
+
+## Sumário
+
+- [Recursos Principais](#recursos-principais)
+- [Arquitetura e Estrutura do Projeto](#arquitetura-e-estrutura-do-projeto)
+- [Instalação Rápida (Usuário Final — Windows)](#instalação-rápida-usuário-final--windows)
+- [Como Usar](#como-usar)
+- [Instalar no Celular como App (PWA / Tela Inicial)](#instalar-no-celular-como-app-pwa--tela-inicial)
+- [Firewall, Rede Local e Diagnóstico](#firewall-rede-local-e-diagnóstico)
+- [Segurança e Privacidade](#segurança-e-privacidade)
+- [Desenvolvimento, Testes e Releases](#desenvolvimento-testes-e-releases)
 
 ---
 
 ## Recursos Principais
 
-- **Controle Unificado de Mídia:**
-  - **Spotify e apps do Windows:** controle via GSMTC (Global System Media Transport Controls) nativo do Windows.
-  - **Google Chrome multi-abas:** extensão MV3 que lista cada aba do YouTube individualmente, permitindo play, pause, seek (±10s), pular anúncio (clicando no botão nativo "Pular"), alternância de tela cheia e volume individual por aba.
-  - **Fallback global:** suporte a players sem GSMTC (ex.: VLC 3.x) via teclas multimídia globais e volume por processo via Core Audio.
-- **Busca e Troca de Vídeos pelo Celular:**
-  - Aba **"Buscar"** dedicada no celular: pesquise vídeos do YouTube diretamente sem necessidade de API key ou servidores externos.
-  - Resultados em cards ricos com miniatura 16:9, canal, duração/ao vivo e contagem de visualizações.
-  - Ações rápidas: "Tocar agora" (reutiliza a aba aberta ou ativa do YouTube no PC) e "Nova aba".
-  - Controle de **Tela Cheia (Fullscreen)**: botão toggle na tela "Tocando agora", opção ao tocar o vídeo e persistência automática de tela cheia ao trocar de vídeo.
-  - Histórico de buscas recentes salvo localmente no celular (localStorage) com chips clicáveis.
-- **Mixer de Volume:**
-  - Volume mestre do sistema com mute.
-  - Volume e silenciamento individual para cada aba do Chrome.
-  - Volume por aplicativo Windows ativo via Core Audio (`pycaw`).
-- **Mouse (Touchpad) e Teclado Remoto:**
-  - Aba **"Controle"** com touchpad multi-gesto (mover cursor com sensibilidade ajustável, toque para clique esquerdo, 2 dedos para clique direito e rolagem, barra lateral de rolagem e trava de arrastar) e teclado remoto em modo envio em lote ou tempo real (com acentuação em português e atalhos como `Alt+Tab`, `Copiar`/`Colar`, setas e `Win`).
-  - **Segurança por padrão:** o controle de mouse/teclado começa **desativado por padrão**, podendo ser ligado/desligado no aplicativo, no menu da bandeja do Windows ou em `/pair`.
-- **Interface Mobile-First (PWA):**
-  - Desenvolvida em React + TypeScript + Tailwind seguindo o padrão de design limpo e fluido (estilo Apple).
-  - Temas Claro, Escuro e Automático (baseado no sistema).
-  - Alvos de toque generosos (mínimo de 44px) e feedback tátil em aparelhos compatíveis.
-- **Segurança e Rede Local:**
-  - Pareamento de uso único via **QR Code** ou **PIN de 6 dígitos** com expiração de 5 minutos e bloqueio temporário contra força bruta.
-  - Autenticação obrigatória por token para conexões vindas da LAN (apenas aparelhos autorizados conseguem controlar o PC).
-  - Proteção contra ataques de DNS rebinding via validação de cabeçalho `Host`.
-  - Descoberta automática de rede via mDNS (`_pcmedia._tcp.local.`) com filtragem de adaptadores virtuais (Hyper-V, WSL, VPNs).
+| Área | O que faz |
+| --- | --- |
+| **Controle Unificado de Mídia** | Controla apps nativos do Windows (Spotify, etc.) via **GSMTC**, múltiplas abas de áudio/vídeo no Google Chrome via extensão MV3 (sem duplicar sessões) e players sem GSMTC (como VLC 3.x) por teclas globais de mídia. |
+| **Busca no YouTube sem API Key** | Aba **Buscar** dedicada no celular para pesquisar vídeos no YouTube pela sessão do Chrome, exibir cards com capa 16:9, canal, duração/`AO VIVO` e visualizações, escolher **Tocar agora** ou **Nova aba** e salvar histórico local de buscas no celular. |
+| **Tela Cheia e Anúncios** | Botão para alternar **Tela cheia** na tela **Tocando**, opção de abrir vídeos já em tela cheia com restauração automática ao trocar de vídeo e botão **Pular anúncio** quando um anúncio está ativo no YouTube. |
+| **Mixer de Volume Completo** | Controle em tempo real do **Volume Geral** do Windows, volume e silenciamento individual por **aba do Chrome** e volume por **aplicativo Windows** ativo via Core Audio (`pycaw`). |
+| **Touchpad e Teclado Remoto** | Aba **Controle** com touchpad redimensionável (`P`/`M`/`G`/`Max` + alça de ajuste livre), sensibilidade ajustável, gestos de 1 e 2 dedos, rolagem dedicada e trava de arrastar; teclado em modo lote ou tempo real (com acentuação em português) e atalhos (`Alt+Tab`, `Tela (F)`, `Copiar`, `Colar`, `Win`). |
+| **Interface Mobile-First (PWA)** | App React + TypeScript + Tailwind com temas **Claro**, **Escuro** e **Automático**, alvos de toque de pelo menos `44px`, reconexão automática e leitura fluida com uma mão. |
+| **Bandeja do Sistema e Autostart** | Roda em segundo plano junto ao relógio do Windows com menu rápido para QR Code, dispositivos pareados, extensão Chrome, logs e opção **Iniciar com o Windows**. |
 
 ---
 
-## Requisitos
+## Arquitetura e Estrutura do Projeto
 
-- Windows 10/11 (arquitetura x64).
-- Python 3.12+ nativo no Windows (com `.venv`).
-- Google Chrome com a extensão do projeto instalada em `chrome://extensions`.
-- Celular ou tablet conectado na mesma rede Wi-Fi do computador.
-
----
-
-## Instalação e Configuração
-
-### 1. Clonar e preparar o ambiente Python
-
-```powershell
-# No PowerShell (como usuário normal):
-git clone https://github.com/rhian/pc_media_control.git
-cd pc_media_control
-
-# Criar e ativar o ambiente virtual nativo:
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-
-# Instalar dependências:
-pip install -r host/requirements.txt
+```text
++-----------------------+       HTTP + WebSocket (LAN)       +-----------------------------------+
+|  Celular (Navegador)  | <================================> |  Host Python (FastAPI / Uvicorn)  |
+|  PWA React + Tailwind |     Pareamento QR / PIN + Token    |  Porta 8765 · mDNS _pcmedia._tcp  |
++-----------------------+                                    +-----------------------------------+
+                                                                |               |               |
+                                         WinRT GSMTC / pycaw ---+               |               +--- Win32 SendInput
+                                                                                v
+                                                                 Extensão Chrome MV3 (WebSocket localhost)
+                                                                 Abas YouTube/HTML5 · Busca · Fullscreen
 ```
 
-### 2. Carregar a extensão no Google Chrome
-
-A extensão faz a ponte com as abas do YouTube e outros reprodutores no Chrome:
-
-1. **Pela bandeja:** Clique com o botão direito no ícone do aplicativo na bandeja do Windows e selecione **"🧩 Abrir pasta da extensão..."**. (Os arquivos são mantidos de forma persistente em `%LOCALAPPDATA%\PCMediaControl\extension`).
-   - *Alternativa manual:* Use a pasta `extension/` deste repositório.
-2. Abra o Chrome e acesse `chrome://extensions`.
-3. No canto superior direito, ative o interruptor **"Modo do desenvolvedor"**.
-4. Clique no botão **"Carregar sem compactação"** (Load unpacked).
-5. Selecione a pasta da extensão aberta no passo 1.
-6. O ID determinístico gerado pela extensão será:
-   `dcnkokmkhlcocfengaobkeacnbdjdcfa`
-
----
-
-## Executando o Servidor
-
-Você pode executar o PC Media Control de duas formas: usando o executável independente (`PCMediaControl.exe`) ou via script Python no ambiente virtual.
-
-### Opção 1: Executável Independente (Recomendado)
-
-O executável inicia diretamente na bandeja do sistema (junto ao relógio do Windows), sem abrir janela preta de terminal:
-
-1. Dê um duplo clique em `PCMediaControl.exe` (ou execute via linha de comando).
-2. O ícone do projeto aparecerá na área de notificação da barra de tarefas.
-3. Se você executar o arquivo novamente com o app já rodando, a segunda instância detecta a trava única e abre automaticamente a tela de pareamento no navegador padrão.
-
-> **Como compilar o executável:**
-> ```powershell
-> .\.venv\Scripts\python.exe scripts\build_exe.py
-> ```
-> O executável será gerado em `dist/PCMediaControl.exe` já empacotando o cliente web, a extensão, os ícones e os recursos estáticos.
-
----
-
-### Opção 2: Via Ambiente Virtual Python
-
-```powershell
-# Execução padrão (LAN ativa + Ícone na bandeja do sistema):
-.\.venv\Scripts\python.exe -m host
-
-# Execução apenas no terminal (sem ícone na bandeja):
-.\.venv\Scripts\python.exe -m host --no-tray
-
-# Execução restrita estritamente ao computador (loopback 127.0.0.1):
-.\.venv\Scripts\python.exe -m host --local-only
+```text
+pc_media_control/
+├── host/                 # Servidor FastAPI, pareamento, rede/mDNS, bandeja Windows e entrada remota
+├── client/               # Interface mobile PWA (React + TypeScript + Tailwind v4 via Vite)
+├── extension/            # Extensão Google Chrome Manifest V3 (ponte multi-aba e busca YouTube)
+├── scripts/              # Utilitários de firewall (allow_firewall.cmd/.ps1), build do .exe e spikes
+├── assets/               # Ícones do aplicativo e da bandeja do sistema
+├── tests/                # Testes automatizados Python (pytest) e helpers da extensão (node:test)
+└── .github/workflows/    # Workflows de CI e geração automática de Release no GitHub
 ```
 
-Ao iniciar pelo terminal com a LAN ativa, o console exibirá:
-1. O IP da rede local selecionado (ex.: `192.168.15.4`).
-2. A URL de pareamento com o código de uso único.
-3. Um **PIN de 6 dígitos** alternativo (expira em 5 minutos).
-4. O **QR Code** impresso em caracteres ASCII no próprio terminal.
+---
+
+## Instalação Rápida (Usuário Final — Windows)
+
+**Requisitos:** Windows 10/11 (x64), Google Chrome instalado no PC e celular conectado na mesma rede Wi-Fi.
+
+### Passo 1 — Baixar na aba Releases
+
+1. Acesse a seção **Releases** do repositório no GitHub e baixe o **`PCMediaControl.exe`**.
+2. Arquivos disponíveis em cada release:
+   - **`PCMediaControl.exe`** — Executável autônomo completo (servidor local, interface mobile, bandeja do Windows e extensão Chrome embutida).
+   - **`PCMediaControl-extension.zip`** — Cópia avulsa da pasta da extensão Chrome (opcional; o próprio `.exe` já extrai a extensão automaticamente na primeira execução).
+   - **`PCMediaControl-firewall-helper.zip`** — Scripts auxiliares (`allow_firewall.cmd` e `allow_firewall.ps1`) caso o aviso de Firewall não apareça ou seja fechado por engano.
+   - **`SHA256SUMS.txt`** — Checksums SHA-256 para conferir a integridade dos arquivos baixados.
+
+### Passo 2 — Executar e liberar o Firewall
+
+1. Dê um duplo clique em **`PCMediaControl.exe`**.
+   - *Nota do Windows SmartScreen:* como o binário não possui assinatura comercial paga, o Windows Defender pode mostrar *"O Windows protegeu o computador"*. Clique em **Mais informações** → **Executar assim mesmo**.
+   - Se o app já estiver aberto, executar novamente abrirá a tela de pareamento no navegador.
+2. Na primeira execução com rede LAN ativa, o Firewall do Windows Defender perguntará se deseja permitir acesso:
+   - Marque **somente** *"Redes privadas, como rede doméstica ou de trabalho"*.
+   - **Desmarque** *"Redes públicas"* e clique em **Permitir acesso**.
+3. O ícone do **PC Media Control** aparecerá na bandeja do sistema (junto ao relógio do Windows).
+
+### Passo 3 — Carregar a extensão no Google Chrome (arrastar e soltar)
+
+> **Por que não instala automaticamente sem abrir o Chrome?** Por política de segurança, o Google Chrome no Windows bloqueia instalação silenciosa fora da Chrome Web Store (registros locais e `--load-extension`). Se no futuro quiser instalação com 1 clique pela loja sem *Modo do desenvolvedor*, basta publicar a extensão como **Não listada (*Unlisted*)** na Chrome Web Store.
+
+Para deixar a instalação local quase imediata sem precisar procurar pastas ocultas em `AppData`:
+
+1. Clique com o botão direito no ícone do app na bandeja do Windows e escolha **`🧩 Abrir pasta da extensão...`**.
+   - Isso abre automaticamente o assistente guiado **`/pair#extensao`** no navegador, copia o caminho da pasta para sua área de transferência e abre o Windows Explorer com a pasta **`extension`** já selecionada (`%LOCALAPPDATA%\PCMediaControl\extension`).
+2. Na aba do assistente no Chrome, clique em **Copiar `chrome://extensions`**, cole na barra de endereços do Chrome e ative o interruptor **Modo do desenvolvedor** (canto superior direito).
+3. **Arraste a pasta `extension`** do Explorer direto para dentro da aba `chrome://extensions` *(ou clique em **Carregar sem compactação** e cole o caminho já copiado com `Ctrl+V`)*.
+4. A página do assistente detecta a conexão automaticamente e muda o selo para **Conectada** (ID fixo: `dcnkokmkhlcocfengaobkeacnbdjdcfa`).
+
+### Passo 4 — Parear o celular e (opcional) iniciar com o Windows
+
+1. Clique com o botão direito no ícone da bandeja → **`📱 Parear Celular (QR Code)...`** para abrir `/pair` no computador.
+2. Aponte a câmera do celular para o QR Code (ou abra `http://<IP-DO-PC>:8765` no navegador do celular e digite o **PIN de 6 dígitos** exibido na tela).
+3. *(Opcional)* No menu da bandeja, ative **`Iniciar com o Windows`**. O executável será copiado para um caminho estável em `%LOCALAPPDATA%\PCMediaControl\PCMediaControl.exe` e registrado em `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
 
 ---
 
-## Ícone na Bandeja do Sistema (System Tray)
+## Como Usar
 
-Ao clicar com o botão direito no ícone do aplicativo na bandeja do Windows, você tem acesso rápido a:
+### Abas do aplicativo no celular
 
-- **Status da Conexão:** exibe o IP e a porta local onde o servidor está atendendo (ex.: `Ativo na LAN (192.168.15.4:8765)`).
-- **📱 Parear Celular (QR Code)...:** abre a página de pareamento (`/pair`) no navegador padrão com o QR Code e PIN de 6 dígitos.
-- **🎵 Abrir Central de Mídia:** abre a interface principal (`/`) no navegador do computador.
-- **🔒 Dispositivos Pareados:** lista os aparelhos autorizados e permite revogar o acesso de qualquer dispositivo com um clique.
-- **🖱️ Mouse e Teclado Remoto:** ativa ou desativa a permissão do touchpad e teclado remoto (desativada por padrão por segurança).
-- **Iniciar com o Windows:** ativa ou desativa a inicialização automática do aplicativo em segundo plano ao ligar o computador (via registro do usuário em `HKCU\...\Run`). Ao ativar, o executável é copiado para um local estável e persistente em `%LOCALAPPDATA%\PCMediaControl\PCMediaControl.exe` (protegendo a inicialização caso a pasta original seja movida ou sincronizada pelo OneDrive).
-- **🧩 Abrir pasta da extensão...:** abre a pasta estável `%LOCALAPPDATA%\PCMediaControl\extension` no Explorer contendo a extensão pronta para ser carregada no Chrome.
-- **📂 Abrir pasta de logs:** abre a pasta `%LOCALAPPDATA%\PCMediaControl\logs` onde os logs rotativos são gravados.
-- **Sair:** encerra o servidor e os serviços de rede graciosamente.
+1. **Tocando:** exibe capa/miniatura, título, canal/artista, status em tempo real, barra de progresso, **Play/Pause**, **±10s**, **Anterior/Próximo**, **Pular anúncio** (quando há anúncio ativo), toggle de **Tela cheia**, seletor de **Sessões** (alternar entre abas do Chrome e apps do Windows) e **Volume Geral**.
+2. **Buscar:** campo de busca no YouTube sem precisar olhar o monitor, resultados com miniatura, canal, duração/`AO VIVO` e visualizações, botões **Tocar agora** (reaproveita a aba controlada ou abre uma nova) e **Nova aba**, opção **Abrir vídeo em tela cheia** e histórico recente salvo localmente no aparelho.
+3. **Volume:** controle do **Volume Geral**, slider e mute de cada **aba do Chrome** individualmente e de cada **aplicativo Windows** ativo.
+4. **Controle:** touchpad e teclado remoto. Por segurança, começa bloqueado — ative pela própria tela (**Ativar Mouse e Teclado**), pela aba **Mais** ou pela bandeja do Windows. Oferece sensibilidade (`0.9x`, `1.5x`, `2.2x`), presets de altura (`P`/`M`/`G`/`Max`) mais alça de redimensionamento livre, 1 dedo para mover/tocar, 2 dedos para rolar ou clique direito, faixa lateral de rolagem, botão **Arrastar/Soltar**, teclado em **Enviar texto** ou **Tempo real** e atalhos rápidos (`Esc`, `Tab`, `Enter`, setas, `Espaço`, `Alt+Tab`, `Tela (F)`, `Copiar`, `Colar`, `Win`).
+5. **Mais:** colar uma URL qualquer para abrir no Chrome, teclas globais de fallback (VLC), interruptor de segurança do controle remoto, **Diagnóstico de Conexão** (URL WS, RTT, latência do host vs Wi-Fi), lista de **Dispositivos Pareados** com revogação imediata e escolha de tema (**Automático**, **Claro**, **Escuro**).
+
+### Menu na Bandeja do Sistema (Windows)
+
+Ao clicar com o botão direito no ícone perto do relógio:
+
+- **Status:** mostra o IP e porta ativos (ex.: `Status: Ativo na LAN (192.168.15.4:8765)`).
+- **`📱 Parear Celular (QR Code)...`:** abre `/pair` localmente para gerar ou ler QR Code e PIN.
+- **`🎵 Abrir Central de Mídia`:** abre a interface web principal no navegador do PC.
+- **`🔒 Dispositivos Pareados`:** exibe os aparelhos autorizados e permite revogação em `/pair`.
+- **`🖱️ Mouse e Teclado Remoto`:** liga ou desliga a permissão de entrada remota.
+- **Iniciar com o Windows:** habilita/desabilita autostart estável em `%LOCALAPPDATA%\PCMediaControl\PCMediaControl.exe`.
+- **`🧩 Abrir pasta da extensão...`:** abre `%LOCALAPPDATA%\PCMediaControl\extension` com instruções de instalação (`LEIA-ME.txt`).
+- **`📂 Abrir pasta de logs`:** abre `%LOCALAPPDATA%\PCMediaControl\logs` com os logs rotativos.
+- **Sair:** encerra servidor, anúncio mDNS e processos auxiliares com limpeza.
 
 ---
 
-## Firewall e Diagnóstico de Rede
+## Instalar no Celular como App (PWA / Tela Inicial)
+
+O cliente já inclui `manifest.webmanifest`, `sw.js` e ícones PNG configurados para modo `standalone`. O comportamento varia conforme o sistema do celular por conta do acesso via HTTP na rede local (`http://<IP-DO-PC>:8765`):
+
+- **iPhone / iPad (Safari):**
+  1. Abra `http://<IP-DO-PC>:8765` no Safari após parear.
+  2. Toque no botão **Compartilhar** → **Adicionar à Tela de Início**.
+  3. O atalho abre a interface em modo **tela cheia (`standalone`)**, sem barra de endereço do navegador.
+- **Android (Google Chrome):**
+  - *Padrão via HTTP:* toque no menu **`⋮`** → **Adicionar à tela inicial**. Como o servidor roda em HTTP puro na rede local (sem certificado HTTPS confiável no Android), o Chrome cria um **atalho Web** (que abre com a barra superior do navegador) em vez do banner nativo *"Instalar aplicativo"*, pois navegadores Chromium exigem *Secure Context* (HTTPS ou `localhost`) para instalação PWA completa com Service Worker ativo.
+  - *Opcional para entusiastas (PWA completo sem HTTPS):* se o seu PC usa IP fixo reservado no roteador (ex.: `http://192.168.15.10:8765`), você pode acessar `chrome://flags/#unsafely-treat-insecure-origin-as-secure` no Chrome do celular, adicionar essa origem e reiniciar o navegador para habilitar o prompt completo de instalação PWA.
+
+---
+
+## Firewall, Rede Local e Diagnóstico
 
 ### 1. Diagnóstico rápido (`doctor`)
 
-Antes de conectar pela primeira vez, execute o utilitário de diagnóstico:
+Se estiver rodando pelo ambiente Python, o comando abaixo diagnostica adaptadores físicos vs virtuais, perfil da rede, regras de firewall, porta `8765` e alertas de isolamento de clientes:
+
 ```powershell
 .\.venv\Scripts\python.exe -m host doctor
 ```
-Ele verifica:
-- Adaptadores de rede físicos vs virtuais.
-- Se o perfil de rede está como Privado ou Público.
-- Regras existentes no Firewall do Windows.
-- Conectividade da porta 8765.
-- Alertas sobre isolamento de clientes (AP Isolation).
 
-### 2. Aviso do Firewall do Windows na Primeira Execução
+### 2. Liberar Firewall com um clique
 
-Na primeira vez que você executar o aplicativo (ou o Python) com a rede LAN ativada, o Windows Defender exibirá a caixa de diálogo:
-> **"O Firewall do Windows Defender bloqueou alguns recursos deste aplicativo"**
+Se o aviso do Firewall do Windows não apareceu ou foi bloqueado por engano:
 
-1. Marque a caixa de seleção: **"Redes privadas, como rede doméstica ou de trabalho"**.
-2. **Desmarque** a caixa de seleção: **"Redes públicas, como as de aeroportos ou cafeterias"** (por segurança).
-3. Clique em **"Permitir acesso"**.
-
----
-
-### 3. Liberar o Firewall via Script (Alternativa Automática)
-
-Se a janela do firewall não apareceu ou foi fechada por engano, você pode criar a regra correta com um clique:
-
-- **Via duplo clique (Mais fácil):**
-  Dê um duplo clique no arquivo `scripts\allow_firewall.cmd`. Ele solicitará permissão de Administrador (UAC) e criará a regra no Firewall automaticamente.
-- **Ou pelo PowerShell como Administrador:**
-  ```powershell
-  Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
-  .\scripts\allow_firewall.ps1
-  ```
-Esse script cria uma regra de entrada no Firewall do Windows restrita exclusivamente à sua sub-rede local (`RemoteAddress LocalSubnet`), sem expor o computador para a internet.
-
-### 3. Perfil de Rede: Público vs Privado
-
-Se a sua rede Wi-Fi estiver configurada como **Perfil Público**, o Firewall do Windows bloqueará todas as conexões de entrada por padrão.
-Para alterar para **Privada**:
-- **Pelo Windows:** Configurações -> Rede e Internet -> Wi-Fi -> Clique na sua rede -> Selecione **"Rede Privada"**.
-- **Ou pelo PowerShell (Administrador):**
-  ```powershell
-  Set-NetConnectionProfile -InterfaceAlias 'Wi-Fi' -NetworkCategory Private
-  ```
-
-### 4. Wi-Fi com Isolamento de Clientes (AP Isolation) & Plano B (Hotspot)
-
-Em algumas redes Wi-Fi públicas, corporativas ou universitárias, o roteador ativa o recurso **AP Isolation** (isolamento de clientes), impedindo que aparelhos na mesma rede conversem entre si.
-- **Sintoma:** O celular não consegue abrir `http://<ip_do_pc>:8765` mesmo após configurar o firewall.
-- **Plano B (Hotspot Móvel):**
-  1. No Windows, abra Configurações -> Rede e Internet -> **Hotspot móvel** e ative-o.
-  2. Conecte o celular na rede Wi-Fi transmitida pelo notebook.
-  3. Inicie o host com `.\.venv\Scripts\python.exe -m host --lan`.
-  4. Escaneie o novo QR code e controle sem interferência de roteadores externos!
-
----
-
-## Testes Automatizados
+- **Para quem baixou pela Release:** extraia `PCMediaControl-firewall-helper.zip` e execute `allow_firewall.cmd` (dê duplo clique e aceite a elevação UAC).
+- **Para quem clonou o repositório:** execute `scripts\allow_firewall.cmd` ou, no PowerShell como Administrador:
 
 ```powershell
-# Testes unitários e de integração Python:
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
+.\scripts\allow_firewall.ps1
+```
+
+O script cria uma regra de entrada na porta TCP `8765` restrita exclusivamente à sub-rede local (`RemoteAddress LocalSubnet`) nos perfis **Privado** e **Domínio**, sem expor o PC à internet.
+
+### 3. Perfil Público vs Privado
+
+Redes Wi-Fi marcadas como **Público** no Windows bloqueiam conexões de entrada. Para mudar para **Privada**:
+
+- **Configurações do Windows:** **Rede e Internet** → **Wi-Fi** → clique na sua rede → selecione **Rede Privada**.
+- **PowerShell (Administrador):**
+
+```powershell
+Set-NetConnectionProfile -InterfaceAlias 'Wi-Fi' -NetworkCategory Private
+```
+
+### 4. Wi-Fi com Isolamento de Clientes (AP Isolation) e Plano B via Hotspot
+
+Em redes corporativas, públicas ou universitárias, o roteador pode bloquear comunicação entre dispositivos conectados ao mesmo Wi-Fi (*AP Isolation*).
+
+- **Sintoma:** `http://<IP-DO-PC>:8765` não abre no celular mesmo com a rede em **Privada** e o Firewall liberado.
+- **Plano B (Hotspot Móvel):** ative o **Hotspot móvel** do Windows (ou o roteador Wi-Fi do celular), conecte PC e celular nessa rede direta e gere um novo QR Code pelo menu da bandeja (`📱 Parear Celular (QR Code)...`).
+
+---
+
+## Segurança e Privacidade
+
+- **Pareamento obrigatório na LAN:** nenhuma requisição vinda da rede local controla mídia, volume ou mouse sem token válido emitido por QR Code ou PIN de 6 dígitos (uso único, expiração de 5 minutos e bloqueio temporário após tentativas inválidas).
+- **Armazenamento seguro de tokens:** apenas o hash SHA-256 dos tokens é persistido em `%LOCALAPPDATA%\PCMediaControl\devices.json`; dispositivos revogados têm suas conexões WebSocket fechadas imediatamente com código `4001`.
+- **Proteção contra DNS rebinding e origens externas:** validação estrita do cabeçalho HTTP `Host` e do cabeçalho `Origin` em `/ws` (apenas o próprio host) e `/ws/extension` (apenas a extensão Chrome de ID `dcnkokmkhlcocfengaobkeacnbdjdcfa`).
+- **Controle remoto desligado por padrão:** touchpad e teclado remoto iniciam desativados em `%LOCALAPPDATA%\PCMediaControl\settings.json`.
+- **Rede recomendada:** como o tráfego local utiliza HTTP/WebSocket na LAN sem TLS, utilize o aplicativo apenas em redes Wi-Fi privadas protegidas por **WPA2/WPA3** ou via hotspot pessoal.
+
+---
+
+## Desenvolvimento, Testes e Releases
+
+### Pré-requisitos (Ambiente Dev)
+
+- Windows 10/11 (x64)
+- Python 3.12+ nativo no Windows (sem WSL)
+- Node.js 22+ e npm
+
+### Preparar ambiente local
+
+```powershell
+git clone https://github.com/<SEU-USUARIO>/pc_media_control.git
+cd pc_media_control
+
+# Ambiente Python
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\pip.exe install -r host/requirements.txt pytest ruff
+
+# Frontend PWA React
+npm --prefix client ci
+npm --prefix client run build
+```
+
+*(Substitua `<SEU-USUARIO>` pelo usuário ou organização do seu repositório no GitHub.)*
+
+### Executar em modo desenvolvimento
+
+```powershell
+# Servidor padrão na LAN + ícone na bandeja
+.\.venv\Scripts\python.exe -m host
+
+# Apenas no terminal (sem bandeja)
+.\.venv\Scripts\python.exe -m host --no-tray
+
+# Restrito ao próprio computador (127.0.0.1)
+.\.venv\Scripts\python.exe -m host --local-only
+
+# Modo dev liberando também o servidor Vite (http://localhost:5173)
+.\.venv\Scripts\python.exe -m host --dev --no-tray
+```
+
+### Executar toda a suíte de lint, testes e build
+
+```powershell
+# Python (lint + testes)
+.\.venv\Scripts\ruff.exe check .
 .\.venv\Scripts\pytest.exe -v
 
-# Linter Python:
-.\.venv\Scripts\ruff.exe check .
-
-# Testes da extensão Chrome (Node.js):
+# Helpers da extensão Chrome (Node test runner)
 node --test tests/test_extension_helpers.mjs
 
-# Linter e testes do cliente PWA (React / Vitest):
+# Cliente PWA (TypeScript + Vitest + build de produção)
 npm --prefix client run lint
 npm --prefix client test
 npm --prefix client run build
 ```
+
+### Gerar o executável localmente
+
+```powershell
+.\.venv\Scripts\python.exe scripts\build_exe.py
+```
+
+O binário final é gerado em `dist/PCMediaControl.exe` (via [pc_media_control.spec](pc_media_control.spec)).
+
+### Automação no GitHub (CI e Releases)
+
+O repositório conta com dois workflows em `.github/workflows/` rodando em `windows-latest`:
+
+- **[`.github/workflows/ci.yml`](.github/workflows/ci.yml):** roda automaticamente em todo `push` e `pull_request` para a branch `main`, validando `ruff`, `pytest`, testes Node da extensão e lint/test/build do cliente PWA.
+- **[`.github/workflows/release.yml`](.github/workflows/release.yml):** roda todo o pacote de testes, executa `scripts/build_exe.py`, empacota `PCMediaControl.exe`, `PCMediaControl-extension.zip`, `PCMediaControl-firewall-helper.zip` e `SHA256SUMS.txt` e publica uma **GitHub Release** com os anexos prontos para download.
+  - **Publicação automática por tag:** crie e envie uma tag começando com `v`:
+    ```powershell
+    git tag v1.0.0
+    git push origin v1.0.0
+    ```
+  - **Execução manual (`workflow_dispatch`):** na aba **Actions** → **Release Windows Executable** → **Run workflow**, informe uma tag (ex.: `v1.0.0`) para publicar a release ou deixe o campo em branco para apenas gerar e baixar o artefato de teste (`pc-media-control-windows-x64`).
