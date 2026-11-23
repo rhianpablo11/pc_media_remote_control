@@ -165,6 +165,10 @@ class RemoteInputProvider(Protocol):
         """Move pointer cursor by relative pixel deltas."""
         ...
 
+    async def move_mouse_abs(self, x: float, y: float, monitor: int = 1) -> bool:
+        """Move pointer cursor to normalized (0..1) coordinates on the given monitor."""
+        ...
+
     async def click_mouse(self, button: MouseButton, double: bool = False) -> bool:
         """Click (or double-click) a mouse button."""
         ...

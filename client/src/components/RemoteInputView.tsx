@@ -20,9 +20,11 @@ import {
   KeyboardIcon,
   LockIcon,
 } from "./Icons";
+import { ScreenMirrorCard } from "./ScreenMirrorCard";
 
 interface RemoteInputViewProps {
   remoteInputEnabled: boolean;
+  screenMirrorAvailable?: boolean;
   onSendInput: (payload: InputMessagePayload, opts?: { expectAck?: boolean }) => boolean;
   onSetRemoteInputEnabled: (enabled: boolean) => boolean;
   onOpenSettings?: () => void;
@@ -84,6 +86,7 @@ function clampDelta(val: number, limit: number): number {
 
 export function RemoteInputView({
   remoteInputEnabled,
+  screenMirrorAvailable = true,
   onSendInput,
   onSetRemoteInputEnabled,
   onOpenSettings,
@@ -540,6 +543,13 @@ export function RemoteInputView({
   if (!remoteInputEnabled) {
     return (
       <div className="flex flex-col gap-3.5">
+        <ScreenMirrorCard
+          remoteInputEnabled={remoteInputEnabled}
+          available={screenMirrorAvailable}
+          onSendInput={onSendInput}
+          onSetRemoteInputEnabled={onSetRemoteInputEnabled}
+        />
+
         <section className="card-surface flex flex-col items-center p-6 text-center">
           <div
             className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border"
@@ -593,6 +603,14 @@ export function RemoteInputView({
 
   return (
     <div className="flex flex-col gap-3.5">
+      {/* 0. Lightweight screen mirror (opt-in) */}
+      <ScreenMirrorCard
+        remoteInputEnabled={remoteInputEnabled}
+        available={screenMirrorAvailable}
+        onSendInput={onSendInput}
+        onSetRemoteInputEnabled={onSetRemoteInputEnabled}
+      />
+
       {/* 1. Touchpad card */}
       <section className="card-surface p-3.5 min-[360px]:p-4">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">

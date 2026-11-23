@@ -28,11 +28,12 @@ import uvicorn
 from host.app import create_app
 from host.config import (
     DEFAULT_EXTENSION_ID,
+    HostConfigStore,
     HostSettings,
     get_logs_dir,
     sync_installed_extension,
 )
-from host.network import list_lan_interfaces, resolve_primary_lan_ip
+from host.network import detect_tailscale_info, list_lan_interfaces, resolve_primary_lan_ip
 from host.pairing import PairingManager, render_qr_ascii
 from host.single_instance import SingleInstanceLock
 from host.tray import SystemTrayApp
@@ -100,6 +101,13 @@ def run_doctor(port: int = 8765) -> int:
             print(f"  - {iface.name}: {iface.ip} {v_tag} ({p_tag}){chosen_mark}")
 
     print(f"\n  IP principal da LAN: {chosen_ip}")
+    ts_info = detect_tailscale_info(interfaces=interfaces, query_cli=True)
+    if ts_info.available:
+        ts_addr = ts_info.dns_name or ts_info.ip or "ativo"
+        print(f"  [INFO] Tailscale detectado (opcional): ip={ts_info.ip}, dns={ts_addr}")
+        print("         Para usar fora da LAN, ative via bandeja ou --tailscale.")
+    else:
+        print("  [INFO] Tailscale: Não detectado (opcional).")
     print()
 
     # 2. Windows Network Profile (Public vs Private)
@@ -270,6 +278,18 @@ def main() -> int:
         help="Origem extra autorizada no /ws (pode repetir)",
     )
     parser.add_argument(
+        "--tailscale",
+        action="store_true",
+        default=False,
+        help="Permite acesso remoto opcional pela sua rede Tailscale (100.x / *.ts.net)",
+    )
+    parser.add_argument(
+        "--allow-host",
+        action="append",
+        default=[],
+        help="Host HTTP extra autorizado no cabeçalho Host (pode repetir)",
+    )
+    parser.add_argument(
         "--no-tray",
         action="store_true",
         help="Não exibe o ícone na bandeja do sistema",
@@ -305,6 +325,8 @@ def main() -> int:
     bind_host = "0.0.0.0" if lan_mode else "127.0.0.1"
     lan_ip: str | None = None
     pairing_mgr = PairingManager()
+    cfg_store = HostConfigStore()
+    interfaces: list = []
 
     if lan_mode:
         interfaces = list_lan_interfaces()
@@ -338,6 +360,20 @@ def main() -> int:
         if not args.headless:
             print(f"\nPC Media Control Host rodando em modo local: http://127.0.0.1:{args.port}\n")
 
+    tailscale_enabled = bool(args.tailscale or cfg_store.get_tailscale_enabled())
+    tailscale_hostname = cfg_store.get_tailscale_hostname() or None
+    tailscale_ip: str | None = None
+    if tailscale_enabled:
+        ts_info = detect_tailscale_info(
+            interfaces=interfaces if lan_mode else None,
+            query_cli=True,
+        )
+        tailscale_ip = ts_info.ip
+        tailscale_hostname = tailscale_hostname or ts_info.dns_name
+        if not args.headless and (tailscale_ip or tailscale_hostname):
+            ts_label = tailscale_hostname or tailscale_ip
+            print(f"[Tailscale] Acesso remoto opcional ATIVO: {ts_label} (IP: {tailscale_ip})")
+
     settings = HostSettings(
         host=bind_host,
         port=args.port,
@@ -348,9 +384,13 @@ def main() -> int:
         lan_mode=lan_mode,
         lan_ip=lan_ip,
         pairing_manager=pairing_mgr,
+        tailscale_enabled=tailscale_enabled,
+        tailscale_ip=tailscale_ip,
+        tailscale_hostname=tailscale_hostname,
+        extra_allowed_hosts=tuple(args.allow_host),
     )
 
-    app = create_app(settings=settings, pairing_manager=pairing_mgr)
+    app = create_app(settings=settings, pairing_manager=pairing_mgr, config_store=cfg_store)
 
     server = uvicorn.Server(
         config=uvicorn.Config(
@@ -370,6 +410,8 @@ def main() -> int:
             on_exit=lambda: setattr(server, "should_exit", True),
             get_remote_input_enabled=lambda: app.state.coordinator.remote_input_enabled,
             on_toggle_remote_input=app.state.set_remote_input_enabled,
+            get_tailscale_enabled=lambda: app.state.coordinator.tailscale_enabled,
+            on_toggle_tailscale=app.state.set_tailscale_enabled,
         )
         tray_app.start()
 

@@ -6,6 +6,7 @@ import {
   cleanMediaTitle,
   extrapolatePosition,
   formatTime,
+  mapClientPointToNormalized,
   safeArtworkUrl,
 } from "./utils";
 
@@ -21,6 +22,7 @@ class MockWebSocket {
   onopen: ((ev: Event) => void) | null = null;
   onmessage: ((ev: MessageEvent) => void) | null = null;
   onclose: ((ev: CloseEvent) => void) | null = null;
+  binaryType: string = "blob";
   sent: string[] = [];
 
   constructor(url: string) {
@@ -44,6 +46,10 @@ class MockWebSocket {
 
   simulateMessage(payload: unknown): void {
     this.onmessage?.({ data: JSON.stringify(payload) } as MessageEvent);
+  }
+
+  simulateBinary(data: unknown): void {
+    this.onmessage?.({ data } as MessageEvent);
   }
 
   simulateClose(code = 1006): void {
@@ -925,5 +931,171 @@ describe("App PWA", () => {
 
     expect(container).toHaveStyle({ height: "330px" });
     expect(localStorage.getItem("pc_media_touchpad_height")).toBe("330");
+  });
+
+  it("maps client pointer coordinates to normalized image coordinates with letterbox support", () => {
+    // Exact 16:9 fit
+    expect(
+      mapClientPointToNormalized(
+        160,
+        90,
+        { left: 0, top: 0, width: 320, height: 180 },
+        1920,
+        1080,
+      ),
+    ).toEqual({ x: 0.5, y: 0.5 });
+
+    // Letterboxed taller container (320x320 holding 16:9 image -> rendered 320x180 centered at y=70..250)
+    expect(
+      mapClientPointToNormalized(
+        160,
+        70,
+        { left: 0, top: 0, width: 320, height: 320 },
+        1920,
+        1080,
+      ),
+    ).toEqual({ x: 0.5, y: 0 });
+    expect(
+      mapClientPointToNormalized(
+        320,
+        250,
+        { left: 0, top: 0, width: 320, height: 320 },
+        1920,
+        1080,
+      ),
+    ).toEqual({ x: 1, y: 1 });
+  });
+
+  it("keeps screen mirror off by default, streams frames on demand, and supports direct tap alongside touchpad", () => {
+    localStorage.clear();
+    localStorage.setItem("pcmedia_auth_token_v1", "tok_mirror_123");
+
+    const origCreateObjectURL = URL.createObjectURL;
+    const origRevokeObjectURL = URL.revokeObjectURL;
+    URL.createObjectURL = vi.fn(() => "blob:mock-frame-1");
+    URL.revokeObjectURL = vi.fn();
+
+    try {
+      render(<App />);
+      const ws = MockWebSocket.instances[0];
+      act(() => {
+        ws.simulateOpen();
+        ws.simulateMessage(
+          makeSampleState({
+            remoteInputEnabled: true,
+            tailscaleEnabled: true,
+            screenMirrorAvailable: true,
+          }),
+        );
+      });
+
+      // Tailscale status is shown read-only in Mais tab
+      fireEvent.click(screen.getByRole("button", { name: "Mais" }));
+      const tailscaleLabel = screen.getByText("Acesso Remoto (Tailscale):");
+      expect(tailscaleLabel).toBeInTheDocument();
+      expect(tailscaleLabel.parentElement).toHaveTextContent("Ativado");
+
+      // Switch to Controle tab — ScreenMirrorCard is OFF by default (only 1 WS open)
+      fireEvent.click(screen.getByRole("button", { name: "Controle" }));
+      expect(screen.getByText("Espelho da Tela")).toBeInTheDocument();
+      expect(screen.getByText("Desligado")).toBeInTheDocument();
+      expect(MockWebSocket.instances.length).toBe(1);
+      // Separate touchpad & keyboard remain visible
+      expect(screen.getByRole("application", { name: "Área do touchpad" })).toBeInTheDocument();
+      expect(screen.getByText("Teclado Remoto")).toBeInTheDocument();
+
+      // Click "Ver tela" -> opens /ws/screen socket, sends auth + config
+      fireEvent.click(screen.getByRole("button", { name: "Ver tela" }));
+      expect(MockWebSocket.instances.length).toBe(2);
+      const screenWs = MockWebSocket.instances[1];
+      expect(screenWs.url).toMatch(/\/ws\/screen$/);
+
+      act(() => {
+        screenWs.simulateOpen();
+        screenWs.simulateMessage({
+          v: 1,
+          type: "screen_meta",
+          monitors: [
+            { id: 1, name: "Tela 1 (1920x1080)", left: 0, top: 0, width: 1920, height: 1080, primary: true },
+            { id: 2, name: "Tela 2 (1280x720)", left: 1920, top: 0, width: 1280, height: 720, primary: false },
+          ],
+          activeMonitor: 1,
+          fps: 10,
+          quality: 60,
+          maxWidth: 960,
+        });
+        screenWs.simulateBinary(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]));
+      });
+
+      const mirrorImg = screen.getByAltText("Tela do PC ao vivo") as HTMLImageElement;
+      expect(mirrorImg).toHaveAttribute("src", "blob:mock-frame-1");
+
+      // Switch quality preset to Eco
+      fireEvent.click(screen.getByRole("button", { name: "Eco" }));
+      expect(JSON.parse(screenWs.sent.at(-1)!)).toMatchObject({
+        v: 1,
+        type: "screen_config",
+        fps: 5,
+        maxWidth: 640,
+        quality: 45,
+      });
+
+      // Mock image geometry & tap center of mirrored screen -> mouse_move_abs + mouse_click
+      Object.defineProperty(mirrorImg, "naturalWidth", { value: 1920, configurable: true });
+      Object.defineProperty(mirrorImg, "naturalHeight", { value: 1080, configurable: true });
+      vi.spyOn(mirrorImg, "getBoundingClientRect").mockReturnValue({
+        left: 0,
+        top: 0,
+        width: 320,
+        height: 180,
+        right: 320,
+        bottom: 180,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      } as DOMRect);
+
+      const stage = screen.getByTestId("screen-mirror-stage");
+      fireEvent.touchStart(stage, { touches: [{ clientX: 160, clientY: 90 }] });
+      fireEvent.touchEnd(stage, {
+        touches: [],
+        changedTouches: [{ clientX: 160, clientY: 90 }],
+      });
+
+      const controlMsgs = ws.sent.map((s) => JSON.parse(s));
+      expect(controlMsgs).toContainEqual({
+        v: 1,
+        type: "input",
+        action: "mouse_move_abs",
+        x: 0.5,
+        y: 0.5,
+        monitor: 1,
+      });
+      expect(controlMsgs.at(-1)).toMatchObject({
+        v: 1,
+        type: "input",
+        action: "mouse_click",
+        button: "left",
+        double: false,
+      });
+
+      // Open and close fullscreen modal
+      fireEvent.click(screen.getByRole("button", { name: "Expandir espelho da tela" }));
+      expect(
+        screen.getByRole("dialog", { name: "Espelho da tela em tela cheia" }),
+      ).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Fechar tela cheia" }));
+      expect(
+        screen.queryByRole("dialog", { name: "Espelho da tela em tela cheia" }),
+      ).not.toBeInTheDocument();
+
+      // Stop mirror closes /ws/screen cleanly
+      fireEvent.click(screen.getByRole("button", { name: "Parar" }));
+      expect(screenWs.readyState).toBe(MockWebSocket.CLOSED);
+      expect(screen.getByRole("button", { name: "Ver tela" })).toBeInTheDocument();
+    } finally {
+      URL.createObjectURL = origCreateObjectURL;
+      URL.revokeObjectURL = origRevokeObjectURL;
+    }
   });
 });

@@ -127,6 +127,49 @@ export function buildWebSocketUrl(): string {
   return `${proto}//${window.location.host}/ws`;
 }
 
+export function buildScreenWebSocketUrl(): string {
+  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${window.location.host}/ws/screen`;
+}
+
+export function mapClientPointToNormalized(
+  clientX: number,
+  clientY: number,
+  rect: { left: number; top: number; width: number; height: number },
+  naturalWidth: number,
+  naturalHeight: number,
+): { x: number; y: number } | null {
+  if (rect.width <= 0 || rect.height <= 0 || naturalWidth <= 0 || naturalHeight <= 0) {
+    return null;
+  }
+  const containerAspect = rect.width / rect.height;
+  const imageAspect = naturalWidth / naturalHeight;
+
+  let renderW = rect.width;
+  let renderH = rect.height;
+  let offsetX = 0;
+  let offsetY = 0;
+
+  if (imageAspect > containerAspect) {
+    renderW = rect.width;
+    renderH = rect.width / imageAspect;
+    offsetY = (rect.height - renderH) / 2;
+  } else if (imageAspect < containerAspect) {
+    renderH = rect.height;
+    renderW = rect.height * imageAspect;
+    offsetX = (rect.width - renderW) / 2;
+  }
+
+  const rawX = (clientX - rect.left - offsetX) / renderW;
+  const rawY = (clientY - rect.top - offsetY) / renderH;
+  const x = Math.max(0, Math.min(1, rawX));
+  const y = Math.max(0, Math.min(1, rawY));
+  return {
+    x: Number(x.toFixed(4)),
+    y: Number(y.toFixed(4)),
+  };
+}
+
 export function isLoopbackHost(): boolean {
   if (typeof window === "undefined") return true;
   const host = window.location.hostname;

@@ -89,6 +89,8 @@ class StateMessage(BaseModel):
     audioSessions: list[AudioSessionPayload]
     extensionConnected: bool = False
     remoteInputEnabled: bool = False
+    tailscaleEnabled: bool = False
+    screenMirrorAvailable: bool = True
 
 
 class ErrorMessage(BaseModel):
@@ -274,6 +276,7 @@ class SearchResultsMessage(BaseModel):
 
 InputAction = Literal[
     "mouse_move",
+    "mouse_move_abs",
     "mouse_click",
     "mouse_down",
     "mouse_up",
@@ -292,6 +295,9 @@ class InputMessage(BaseModel):
     action: InputAction
     dx: int | None = None
     dy: int | None = None
+    x: float | None = None
+    y: float | None = None
+    monitor: int | None = None
     button: MouseButton | None = None
     double: bool = False
     text: str | None = None
@@ -307,6 +313,19 @@ class InputMessage(BaseModel):
                 raise ValueError("O evento 'mouse_move' exige 'dx' e 'dy' inteiros.")
             if not (-500 <= self.dx <= 500) or not (-500 <= self.dy <= 500):
                 raise ValueError("Deltas de 'mouse_move' devem estar entre -500 e 500.")
+            return self
+
+        if self.action == "mouse_move_abs":
+            if self.x is None or self.y is None:
+                raise ValueError("O evento 'mouse_move_abs' exige 'x' e 'y' normalizados.")
+            if not math.isfinite(self.x) or not math.isfinite(self.y):
+                raise ValueError("Coordenadas de 'mouse_move_abs' devem ser números finitos.")
+            if not (0.0 <= self.x <= 1.0) or not (0.0 <= self.y <= 1.0):
+                raise ValueError("Coordenadas de 'mouse_move_abs' devem estar entre 0.0 e 1.0.")
+            if self.monitor is None:
+                self.monitor = 1
+            elif not (1 <= self.monitor <= 16):
+                raise ValueError("Monitor de 'mouse_move_abs' deve estar entre 1 e 16.")
             return self
 
         if self.action == "mouse_scroll":

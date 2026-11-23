@@ -164,15 +164,28 @@ class HostConfigStore:
         return self._path
 
     def _load(self) -> dict[str, object]:
+        defaults: dict[str, object] = {
+            "remoteInputEnabled": False,
+            "tailscaleEnabled": False,
+            "tailscaleHostname": "",
+        }
         if not self._path.is_file():
-            return {"remoteInputEnabled": False}
+            return defaults
         try:
             raw = json.loads(self._path.read_text(encoding="utf-8"))
             if isinstance(raw, dict):
-                return {"remoteInputEnabled": bool(raw.get("remoteInputEnabled", False)), **raw}
+                return {
+                    **defaults,
+                    **raw,
+                    "remoteInputEnabled": bool(raw.get("remoteInputEnabled", False)),
+                    "tailscaleEnabled": bool(raw.get("tailscaleEnabled", False)),
+                    "tailscaleHostname": sanitize_hostname(
+                        str(raw.get("tailscaleHostname") or "")
+                    ),
+                }
         except Exception:
             pass
-        return {"remoteInputEnabled": False}
+        return defaults
 
     def _save(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -194,9 +207,77 @@ class HostConfigStore:
         self._save()
         return flag
 
+    def get_tailscale_enabled(self) -> bool:
+        """Return whether optional Tailscale remote hosts/origins are permitted."""
+        return bool(self._data.get("tailscaleEnabled", False))
+
+    def set_tailscale_enabled(self, enabled: bool) -> bool:
+        """Persist optional Tailscale remote access toggle to settings.json cleanly."""
+        flag = bool(enabled)
+        self._data["tailscaleEnabled"] = flag
+        self._save()
+        return flag
+
+    def get_tailscale_hostname(self) -> str:
+        """Return optional manual Tailscale MagicDNS hostname."""
+        return sanitize_hostname(str(self._data.get("tailscaleHostname") or ""))
+
+    def set_tailscale_hostname(self, hostname: str) -> str:
+        """Sanitize and persist optional Tailscale MagicDNS hostname."""
+        clean = sanitize_hostname(hostname)
+        self._data["tailscaleHostname"] = clean
+        self._save()
+        return clean
+
 
 DEFAULT_CLIENT_DIST_DIR = get_base_dir() / "client" / "dist"
 DEFAULT_DEV_WS_ORIGINS = ("http://localhost:5173", "http://127.0.0.1:5173")
+
+
+def sanitize_hostname(raw: str | None) -> str:
+    """Normalize a hostname or MagicDNS FQDN (strips scheme, port, path, trailing dot)."""
+    if not raw:
+        return ""
+    cleaned = raw.strip().lower()
+    if "://" in cleaned:
+        parsed = urlsplit(cleaned)
+        cleaned = (parsed.hostname or "").strip().lower()
+    else:
+        cleaned = cleaned.split("/", 1)[0].strip()
+        if cleaned.count(":") == 1:
+            cleaned = cleaned.split(":", 1)[0].strip()
+    return cleaned.rstrip(".")
+
+
+def build_tailscale_hosts_and_origins(
+    port: int,
+    tailscale_ip: str | None,
+    tailscale_hostname: str | None,
+) -> tuple[set[str], set[str]]:
+    """Build allowed Host headers and WebSocket Origins for Tailscale access."""
+    hosts: set[str] = set()
+    origins: set[str] = set()
+    port_suffix = f":{port}" if port != 80 else ""
+
+    clean_ip = tailscale_ip.strip().lower() if tailscale_ip else ""
+    if clean_ip:
+        hosts.add(clean_ip)
+        hosts.add(f"{clean_ip}{port_suffix}")
+        origins.add(f"http://{clean_ip}{port_suffix}")
+        origins.add(f"https://{clean_ip}")
+        origins.add(f"https://{clean_ip}{port_suffix}")
+
+    clean_host = sanitize_hostname(tailscale_hostname)
+    if clean_host:
+        hosts.add(clean_host)
+        hosts.add(f"{clean_host}{port_suffix}")
+        hosts.add(f"{clean_host}:443")
+        origins.add(f"https://{clean_host}")
+        origins.add(f"https://{clean_host}{port_suffix}")
+        origins.add(f"http://{clean_host}")
+        origins.add(f"http://{clean_host}{port_suffix}")
+
+    return hosts, origins
 
 
 def extension_id_from_public_key_b64(key_b64: str) -> str:
@@ -238,6 +319,10 @@ class HostSettings:
     lan_mode: bool = False
     lan_ip: str | None = None
     pairing_manager: PairingManager | None = None
+    tailscale_enabled: bool = False
+    tailscale_ip: str | None = None
+    tailscale_hostname: str | None = None
+    extra_allowed_hosts: tuple[str, ...] = ()
 
     def get_allowed_ws_origins(self) -> set[str]:
         """Return normalized Origin values permitted to connect to /ws."""
@@ -259,6 +344,13 @@ class HostSettings:
                     base.append(f"http://pcmedia.local{default_port_suffix}")
                 except Exception:  # noqa: BLE001
                     pass
+            if self.tailscale_enabled:
+                _, ts_origins = build_tailscale_hosts_and_origins(
+                    self.port,
+                    self.tailscale_ip,
+                    self.tailscale_hostname,
+                )
+                base.extend(ts_origins)
 
         dev_origins = DEFAULT_DEV_WS_ORIGINS if self.dev_mode else ()
         normalized = {
@@ -294,6 +386,19 @@ class HostSettings:
                 allowed.add(f"pcmedia.local{port_suffix}")
             except Exception:  # noqa: BLE001
                 pass
+
+        if self.tailscale_enabled:
+            ts_hosts, _ = build_tailscale_hosts_and_origins(
+                self.port,
+                self.tailscale_ip,
+                self.tailscale_hostname,
+            )
+            allowed.update(ts_hosts)
+
+        for item in self.extra_allowed_hosts:
+            cleaned = item.strip().lower()
+            if cleaned:
+                allowed.add(cleaned)
 
         if self.dev_mode:
             allowed.add("localhost:5173")

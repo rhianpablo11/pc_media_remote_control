@@ -11,6 +11,7 @@ interface MoreViewProps {
   onCommand: (sessionId: string, action: MediaAction) => void;
   onReconnect: () => void;
   remoteInputEnabled?: boolean;
+  tailscaleEnabled?: boolean;
   onSetRemoteInputEnabled?: (enabled: boolean) => boolean;
   pairedDevices?: PairedDevicePublic[];
   onRefreshDevices?: () => void;
@@ -34,6 +35,7 @@ export function MoreView({
   onCommand,
   onReconnect,
   remoteInputEnabled = false,
+  tailscaleEnabled = false,
   onSetRemoteInputEnabled,
   pairedDevices = [],
   onRefreshDevices,
@@ -261,6 +263,10 @@ export function MoreView({
           <div className="flex justify-between border-t pt-2" style={{ borderColor: "var(--hairline)" }}>
             <span style={{ color: "var(--text-secondary)" }}>Ambiente:</span>
             <span>{diagnostic?.isLoopback ? "Loopback (Localhost)" : "Rede Local (LAN)"}</span>
+          </div>
+          <div className="flex justify-between border-t pt-2" style={{ borderColor: "var(--hairline)" }}>
+            <span style={{ color: "var(--text-secondary)" }}>Acesso Remoto (Tailscale):</span>
+            <span>{tailscaleEnabled ? "Ativado" : "Desativado (opcional no PC)"}</span>
           </div>
           <div className="flex justify-between border-t pt-2" style={{ borderColor: "var(--hairline)" }}>
             <span style={{ color: "var(--text-secondary)" }}>Token Autenticação:</span>

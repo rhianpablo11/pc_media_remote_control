@@ -7,8 +7,9 @@ import contextlib
 import html
 import json
 import logging
+import time
 from collections import defaultdict
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs
@@ -19,24 +20,38 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from host.config import (
     HostConfigStore,
     HostSettings,
+    build_tailscale_hosts_and_origins,
     get_installed_extension_dir,
     normalize_origin,
     open_extension_folder_for_install,
+    sanitize_hostname,
 )
 from host.input_control import WindowsInputProvider
-from host.network import MdnsPublisher
+from host.network import MdnsPublisher, TailscaleInfo, detect_tailscale_info
 from host.pairing import (
     PairingManager,
     render_qr_data_url,
 )
-from host.protocol import ErrorMessage
+from host.protocol import ErrorMessage, PongMessage
 from host.providers.base import AudioControlProvider, RemoteInputProvider, SessionProvider
 from host.providers.chrome_extension import ChromeExtensionProvider
 from host.providers.windows import WindowsProvider
+from host.screen_mirror import MssScreenCaptureProvider, ScreenCaptureProvider
 from host.state import HostStateCoordinator
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 LOCALHOST_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
+LOCAL_HOSTNAMES = {"localhost", "127.0.0.1", "[::1]", "::1", "testclient", "testserver"}
+PROXY_HEADER_NAMES = (
+    "x-forwarded-for",
+    "x-forwarded-host",
+    "x-forwarded-proto",
+    "forwarded",
+    "x-real-ip",
+    "tailscale-user-login",
+    "tailscale-user-name",
+)
+MAX_SCREEN_CLIENTS = 2
 logger = logging.getLogger(__name__)
 
 
@@ -46,6 +61,148 @@ def is_loopback_client(host_or_ip: str | None) -> bool:
         return False
     clean = host_or_ip.strip().lower()
     return clean in LOCALHOST_HOSTS
+
+
+def _extract_hostname(host_header: str | None) -> str:
+    if not host_header:
+        return ""
+    clean = host_header.strip().lower()
+    if not clean:
+        return ""
+    if clean.startswith("["):
+        end_bracket = clean.find("]")
+        if end_bracket != -1:
+            return clean[: end_bracket + 1]
+    if ":" in clean:
+        return clean.split(":", 1)[0].strip()
+    return clean
+
+
+def is_proxied_request(headers: Mapping[str, str]) -> bool:
+    """Return True when reverse-proxy or Tailscale Serve forwarding headers are present."""
+    for key, val in headers.items():
+        if key.strip().lower() in PROXY_HEADER_NAMES and val and val.strip():
+            return True
+    return False
+
+
+def is_trusted_local_request(
+    client_host: str | None,
+    headers: Mapping[str, str],
+) -> bool:
+    """Return True only for direct unproxied loopback connections on the local PC."""
+    if not is_loopback_client(client_host):
+        return False
+    if is_proxied_request(headers):
+        return False
+    host_header = ""
+    for key, val in headers.items():
+        if key.strip().lower() == "host":
+            host_header = val
+            break
+    if host_header:
+        hostname = _extract_hostname(host_header)
+        if hostname and hostname not in LOCAL_HOSTNAMES:
+            return False
+    return True
+
+
+async def _authenticate_ws_client(
+    websocket: WebSocket,
+    pairing_mgr: PairingManager,
+    device_websockets: dict[str, set[WebSocket]],
+    client_host: str,
+    endpoint_label: str,
+) -> str | None:
+    """Perform first-frame JSON token auth for non-local WebSocket clients."""
+    try:
+        raw_auth_text = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
+    except TimeoutError:
+        logger.warning(
+            "WebSocket %s rejeitado de %s: timeout de 5.0s aguardando auth na LAN",
+            endpoint_label,
+            client_host,
+        )
+        with contextlib.suppress(Exception):
+            err = ErrorMessage(
+                code="pairing_required",
+                message="Tempo limite de autenticação expirado. Pareie o dispositivo.",
+            )
+            await websocket.send_text(err.model_dump_json())
+            await websocket.close(code=4001, reason="Authentication timeout")
+        return None
+    except WebSocketDisconnect:
+        logger.info(
+            "WebSocket %s desconectado pelo cliente %s durante handshake",
+            endpoint_label,
+            client_host,
+        )
+        return None
+
+    try:
+        raw_auth_json = json.loads(raw_auth_text)
+    except json.JSONDecodeError:
+        logger.warning(
+            "WebSocket %s rejeitado de %s: frame de auth não é JSON válido: %r",
+            endpoint_label,
+            client_host,
+            raw_auth_text[:120],
+        )
+        with contextlib.suppress(Exception):
+            err = ErrorMessage(
+                code="invalid_json",
+                message="Payload de autenticação não é JSON válido.",
+            )
+            await websocket.send_text(err.model_dump_json())
+            await websocket.close(code=4001, reason="Invalid JSON auth frame")
+        return None
+
+    if (
+        not isinstance(raw_auth_json, dict)
+        or raw_auth_json.get("type") != "auth"
+        or not raw_auth_json.get("token")
+    ):
+        logger.warning(
+            "WebSocket %s rejeitado de %s: frame de auth inválido ou sem token: %r",
+            endpoint_label,
+            client_host,
+            raw_auth_text[:120],
+        )
+        with contextlib.suppress(Exception):
+            err = ErrorMessage(
+                code="pairing_required",
+                message="Dispositivo não autenticado. Autenticação obrigatória na LAN.",
+            )
+            await websocket.send_text(err.model_dump_json())
+            await websocket.close(code=4001, reason="Pairing required")
+        return None
+
+    token = str(raw_auth_json["token"])
+    device = pairing_mgr.validate_token(token)
+    if device is None:
+        logger.warning(
+            "WebSocket %s rejeitado de %s: token inválido, revogado ou inexistente",
+            endpoint_label,
+            client_host,
+        )
+        with contextlib.suppress(Exception):
+            err = ErrorMessage(
+                code="pairing_required",
+                message="Token de pareamento inválido ou revogado. Pareie novamente.",
+            )
+            await websocket.send_text(err.model_dump_json())
+            await websocket.close(code=4001, reason="Pairing token invalid or revoked")
+        return None
+
+    device_websockets[device.id].add(websocket)
+    logger.info(
+        "WebSocket %s autenticado com sucesso para '%s' (ID: %s, IP: %s)",
+        endpoint_label,
+        device.name,
+        device.id,
+        client_host,
+    )
+    return device.id
 
 
 def _serve_dist_file(
@@ -78,6 +235,7 @@ def create_app(
     pairing_manager: PairingManager | None = None,
     input_provider: RemoteInputProvider | None = None,
     config_store: HostConfigStore | None = None,
+    screen_provider: ScreenCaptureProvider | None = None,
 ) -> FastAPI:
     """Create and configure the FastAPI host application with pairing and security."""
     cfg = settings or HostSettings()
@@ -88,6 +246,13 @@ def create_app(
     if providers is None or audio_provider is None:
         owned_windows = WindowsProvider()
 
+    owned_screen: MssScreenCaptureProvider | None = None
+    if screen_provider is None:
+        owned_screen = MssScreenCaptureProvider()
+    active_screen: ScreenCaptureProvider = (
+        screen_provider if screen_provider is not None else owned_screen  # type: ignore[assignment]
+    )
+
     ext_provider = chrome_provider or ChromeExtensionProvider()
     active_audio: AudioControlProvider = (
         audio_provider if audio_provider is not None else owned_windows  # type: ignore[assignment]
@@ -96,8 +261,30 @@ def create_app(
         list(providers) if providers is not None else [ext_provider, owned_windows]  # type: ignore[list-item]
     )
     active_input: RemoteInputProvider = (
-        input_provider if input_provider is not None else WindowsInputProvider()
+        input_provider
+        if input_provider is not None
+        else WindowsInputProvider(screen_provider=active_screen)
     )
+
+    ts_enabled_initial = bool(cfg.tailscale_enabled or cfg_store.get_tailscale_enabled())
+    ts_hostname_initial = sanitize_hostname(
+        cfg.tailscale_hostname or cfg_store.get_tailscale_hostname()
+    )
+    ts_info_cache = TailscaleInfo(
+        available=bool(cfg.tailscale_ip or ts_hostname_initial),
+        ip=cfg.tailscale_ip,
+        dns_name=ts_hostname_initial or None,
+    )
+    if ts_enabled_initial and ts_info_cache.ip is None:
+        detected_ts = detect_tailscale_info(query_cli=False)
+        ts_info_cache = TailscaleInfo(
+            available=bool(detected_ts.ip or ts_hostname_initial or detected_ts.dns_name),
+            ip=detected_ts.ip,
+            dns_name=ts_hostname_initial or detected_ts.dns_name,
+        )
+
+    def _on_tailscale_store_change(enabled: bool) -> None:
+        cfg_store.set_tailscale_enabled(enabled)
 
     coordinator = HostStateCoordinator(
         providers=active_providers,
@@ -105,7 +292,50 @@ def create_app(
         input_provider=active_input,
         remote_input_enabled=cfg_store.get_remote_input_enabled(),
         on_remote_input_change=cfg_store.set_remote_input_enabled,
+        tailscale_enabled=ts_enabled_initial,
+        on_tailscale_change=_on_tailscale_store_change,
+        screen_mirror_available=True,
     )
+
+    def _refresh_tailscale_cache(query_cli: bool = False) -> TailscaleInfo:
+        nonlocal ts_info_cache
+        detected = detect_tailscale_info(query_cli=query_cli)
+        stored_host = sanitize_hostname(
+            cfg.tailscale_hostname or cfg_store.get_tailscale_hostname()
+        )
+        resolved_ip = cfg.tailscale_ip or detected.ip
+        resolved_dns = stored_host or detected.dns_name
+        ts_info_cache = TailscaleInfo(
+            available=bool(resolved_ip or resolved_dns),
+            ip=resolved_ip,
+            dns_name=resolved_dns,
+        )
+        return ts_info_cache
+
+    def _get_effective_allowed_hosts() -> set[str]:
+        allowed = cfg.get_allowed_hosts()
+        if coordinator.tailscale_enabled:
+            ts_hosts, _ = build_tailscale_hosts_and_origins(
+                cfg.port,
+                ts_info_cache.ip,
+                ts_info_cache.dns_name,
+            )
+            allowed.update(ts_hosts)
+        return allowed
+
+    def _get_effective_allowed_ws_origins() -> set[str]:
+        allowed = cfg.get_allowed_ws_origins()
+        if coordinator.tailscale_enabled and cfg.allowed_ws_origins is None:
+            _, ts_origins = build_tailscale_hosts_and_origins(
+                cfg.port,
+                ts_info_cache.ip,
+                ts_info_cache.dns_name,
+            )
+            for item in ts_origins:
+                norm = normalize_origin(item)
+                if norm:
+                    allowed.add(norm)
+        return allowed
 
     async def _on_extension_change() -> None:
         await coordinator.broadcast_state(force=True)
@@ -113,6 +343,7 @@ def create_app(
     ext_provider.set_on_change(_on_extension_change)
 
     device_websockets: dict[str, set[WebSocket]] = defaultdict(set)
+    active_screen_clients: set[WebSocket] = set()
     server_loop: asyncio.AbstractEventLoop | None = None
 
     def _on_device_revoked(device_id: str) -> None:
@@ -164,6 +395,8 @@ def create_app(
                 await mdns_publisher.async_stop()
             if owned_windows is not None:
                 owned_windows.close()
+            if owned_screen is not None:
+                owned_screen.close()
 
     app = FastAPI(title="PC Media Control Host", version="0.1.0", lifespan=lifespan)
     app.state.coordinator = coordinator
@@ -171,6 +404,7 @@ def create_app(
     app.state.settings = cfg
     app.state.pairing_manager = pairing_mgr
     app.state.config_store = cfg_store
+    app.state.screen_provider = active_screen
 
     def _set_remote_input_threadsafe(enabled: bool) -> bool:
         flag = coordinator.set_remote_input_enabled(enabled)
@@ -187,7 +421,25 @@ def create_app(
                 asyncio.run_coroutine_threadsafe(coro, server_loop)
         return flag
 
+    def _set_tailscale_threadsafe(enabled: bool) -> bool:
+        if enabled:
+            _refresh_tailscale_cache(query_cli=False)
+        flag = coordinator.set_tailscale_enabled(enabled)
+        if server_loop is not None and server_loop.is_running():
+            try:
+                current_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                current_loop = None
+
+            coro = coordinator.broadcast_state(force=True)
+            if current_loop is server_loop:
+                server_loop.create_task(coro)
+            else:
+                asyncio.run_coroutine_threadsafe(coro, server_loop)
+        return flag
+
     app.state.set_remote_input_enabled = _set_remote_input_threadsafe
+    app.state.set_tailscale_enabled = _set_tailscale_threadsafe
 
     # 1. Host header validation middleware (mitigate DNS rebinding)
     @app.middleware("http")
@@ -195,7 +447,7 @@ def create_app(
         host_header = request.headers.get("host")
         if host_header:
             clean_host = host_header.strip().lower()
-            allowed = cfg.get_allowed_hosts()
+            allowed = _get_effective_allowed_hosts()
             if clean_host not in allowed:
                 logger.warning("Requisição HTTP rejeitada por Host inválido: %r", host_header)
                 return PlainTextResponse(
@@ -251,7 +503,7 @@ def create_app(
     @app.get("/legacy-test", response_class=HTMLResponse)
     async def legacy_test_page(request: Request) -> HTMLResponse:
         client_host = request.client.host if request.client is not None else ""
-        if not is_loopback_client(client_host):
+        if not is_trusted_local_request(client_host, request.headers):
             raise HTTPException(status_code=403, detail="Acesso restrito ao computador local.")
         html_path = STATIC_DIR / "index.html"
         return HTMLResponse(html_path.read_text(encoding="utf-8"))
@@ -259,7 +511,7 @@ def create_app(
     @app.get("/pair", response_class=HTMLResponse)
     async def pairing_page(request: Request) -> HTMLResponse:
         client_host = request.client.host if request.client is not None else ""
-        if not is_loopback_client(client_host):
+        if not is_trusted_local_request(client_host, request.headers):
             raise HTTPException(status_code=403, detail="Acesso restrito ao computador local.")
 
         session = pairing_mgr.get_or_create_pairing_session()
@@ -278,6 +530,41 @@ def create_app(
             "Extensão conectada com sucesso!"
             if ext_connected
             else "Aguardando conexão da extensão no Google Chrome…"
+        )
+
+        ts_info = _refresh_tailscale_cache(query_cli=False)
+        ts_enabled = coordinator.tailscale_enabled
+        ts_badge_text = "Ativado" if ts_enabled else "Desativado (padrão)"
+        ts_badge_bg = "#e6f6ec" if ts_enabled else "#f2f2f7"
+        ts_badge_color = "#1b7a34" if ts_enabled else "#666"
+        ts_next_val = "false" if ts_enabled else "true"
+        ts_btn_label = "Desativar Acesso Tailscale" if ts_enabled else "Ativar Acesso Tailscale"
+        ts_btn_bg = "#c62828" if ts_enabled else "#0066cc"
+        ts_ip_html = html.escape(ts_info.ip or "Não detectado")
+        ts_dns_val = ts_info.dns_name or ""
+        ts_dns_html = html.escape(ts_dns_val)
+        ts_qr_url = (
+            f"http://{ts_info.ip}:{cfg.port}/?pair={session.code}"
+            if ts_info.ip
+            else (f"https://{ts_dns_val}/?pair={session.code}" if ts_dns_val else "")
+        )
+        ts_qr_block = ""
+        if ts_enabled and ts_qr_url:
+            ts_qr_data = render_qr_data_url(ts_qr_url)
+            ts_qr_safe = html.escape(ts_qr_url)
+            ts_qr_block = f"""
+            <div style="text-align:center;margin:14px 0 8px 0;">
+              <img src="{ts_qr_data}" alt="QR Code Tailscale" class="qr-img"
+                   style="width:170px;height:170px;" />
+              <div style="font-size:12px;color:#555;word-break:break-all;margin-top:6px;">
+                URL Tailscale: <a href="{ts_qr_safe}" style="color:#0066cc;">{ts_qr_safe}</a>
+              </div>
+            </div>"""
+        ts_serve_host = ts_dns_val or "meu-pc.tailnet.ts.net"
+        ts_serve_note = (
+            f"Para HTTPS automático (instalação PWA no Android), rode: "
+            f"<code>tailscale serve --bg {cfg.port}</code> e acesse "
+            f"<code>https://{html.escape(ts_serve_host)}</code>."
         )
 
         pin_formatted = f"{session.pin[:3]} {session.pin[3:]}"
@@ -464,6 +751,62 @@ def create_app(
       <input type="hidden" name="enabled" value="{remote_next_val}" />
       <button type="submit" class="btn" style="background: #1d1d1f;">{remote_btn_label}</button>
     </form>
+
+    <hr style="border: none; border-top: 1px solid #e5e5ea; margin: 28px 0;" />
+
+    <section id="tailscale">
+      <div class="ext-header">
+        <h2 style="font-size: 16px; margin: 0;">Acesso Remoto (Tailscale — opcional)</h2>
+        <span class="ext-badge" style="background:{ts_badge_bg};color:{ts_badge_color};">
+          {ts_badge_text}
+        </span>
+      </div>
+      <p style="font-size: 13px; color: #666; margin: 0 0 8px 0;">
+        Por padrão, apenas dispositivos na sua rede Wi-Fi local acessam o host. Ative somente se
+        quiser acessar o PC fora de casa pela sua rede privada Tailscale.
+      </p>
+      <div class="path-box" style="margin-bottom:10px;">
+        IP Tailscale: <strong>{ts_ip_html}</strong>
+        {f" · MagicDNS: <strong>{ts_dns_html}</strong>" if ts_dns_html else ""}
+      </div>
+      {ts_qr_block}
+      <form method="POST" action="/pair/tailscale" style="margin: 8px 0 10px 0;">
+        <label style="display:block;font-size:12px;font-weight:600;color:#444;margin-bottom:4px;">
+          Host MagicDNS Tailscale (opcional)
+        </label>
+        <div class="btn-row" style="margin-top:0;margin-bottom:10px;">
+          <input
+            type="text"
+            name="hostname"
+            value="{ts_dns_html}"
+            placeholder="ex.: meu-pc.tailnet.ts.net"
+            style="flex:1;padding:9px 11px;border-radius:10px;
+                   border:1px solid #d5d5dc;font-size:13px;"
+          />
+          <button
+            type="submit"
+            name="action"
+            value="save_host"
+            class="btn-secondary"
+            style="flex:0 0 auto;"
+          >
+            Salvar host
+          </button>
+        </div>
+        <button
+          type="submit"
+          name="enabled"
+          value="{ts_next_val}"
+          class="btn"
+          style="background:{ts_btn_bg};"
+        >
+          {ts_btn_label}
+        </button>
+      </form>
+      <p style="font-size: 12px; color: #666; margin: 6px 0 0 0;">
+        {ts_serve_note}
+      </p>
+    </section>
   </div>
   <script>
     (function () {{
@@ -545,7 +888,7 @@ def create_app(
     @app.get("/api/extension/status")
     async def extension_status(request: Request) -> JSONResponse:
         client_host = request.client.host if request.client is not None else ""
-        if not is_loopback_client(client_host):
+        if not is_trusted_local_request(client_host, request.headers):
             raise HTTPException(status_code=403, detail="Acesso restrito ao computador local.")
         return JSONResponse(
             {
@@ -558,7 +901,7 @@ def create_app(
     @app.post("/pair/open-extension-dir")
     async def open_extension_dir_endpoint(request: Request) -> Response:
         client_host = request.client.host if request.client is not None else ""
-        if not is_loopback_client(client_host):
+        if not is_trusted_local_request(client_host, request.headers):
             raise HTTPException(status_code=403, detail="Acesso restrito ao computador local.")
         ext_dir = open_extension_folder_for_install()
         is_fetch = (
@@ -572,7 +915,7 @@ def create_app(
     @app.post("/pair/refresh")
     async def refresh_pairing(request: Request) -> Response:
         client_host = request.client.host if request.client is not None else ""
-        if not is_loopback_client(client_host):
+        if not is_trusted_local_request(client_host, request.headers):
             raise HTTPException(status_code=403, detail="Acesso restrito ao computador local.")
         pairing_mgr.get_or_create_pairing_session(force_new=True)
         return Response(status_code=303, headers={"Location": "/pair"})
@@ -580,7 +923,7 @@ def create_app(
     @app.post("/pair/revoke/{device_id}")
     async def revoke_device_form(request: Request, device_id: str) -> Response:
         client_host = request.client.host if request.client is not None else ""
-        if not is_loopback_client(client_host):
+        if not is_trusted_local_request(client_host, request.headers):
             raise HTTPException(status_code=403, detail="Acesso restrito ao computador local.")
         pairing_mgr.revoke_device(device_id)
         return Response(status_code=303, headers={"Location": "/pair"})
@@ -588,10 +931,10 @@ def create_app(
     @app.post("/pair/remote-input")
     async def toggle_remote_input_form(request: Request) -> Response:
         client_host = request.client.host if request.client is not None else ""
-        if not is_loopback_client(client_host):
+        if not is_trusted_local_request(client_host, request.headers):
             raise HTTPException(status_code=403, detail="Acesso restrito ao computador local.")
         raw_body = (await request.body()).decode("utf-8", errors="ignore")
-        parsed_form = parse_qs(raw_body)
+        parsed_form = parse_qs(raw_body, keep_blank_values=True)
         enabled_list = parsed_form.get("enabled")
         raw_val = (
             str(enabled_list[0]).strip().lower()
@@ -606,6 +949,29 @@ def create_app(
         coordinator.set_remote_input_enabled(next_state)
         await coordinator.broadcast_state(force=True)
         return Response(status_code=303, headers={"Location": "/pair"})
+
+    @app.post("/pair/tailscale")
+    async def toggle_tailscale_form(request: Request) -> Response:
+        client_host = request.client.host if request.client is not None else ""
+        if not is_trusted_local_request(client_host, request.headers):
+            raise HTTPException(status_code=403, detail="Acesso restrito ao computador local.")
+        raw_body = (await request.body()).decode("utf-8", errors="ignore")
+        parsed_form = parse_qs(raw_body, keep_blank_values=True)
+        if "hostname" in parsed_form:
+            cfg_store.set_tailscale_hostname(str(parsed_form["hostname"][0]))
+
+        enabled_list = parsed_form.get("enabled")
+        raw_val = (
+            str(enabled_list[0]).strip().lower()
+            if enabled_list
+            else str(request.query_params.get("enabled") or "").strip().lower()
+        )
+        if raw_val:
+            next_state = raw_val in {"1", "true", "on", "yes"}
+            coordinator.set_tailscale_enabled(next_state)
+        _refresh_tailscale_cache(query_cli=True)
+        await coordinator.broadcast_state(force=True)
+        return Response(status_code=303, headers={"Location": "/pair#tailscale"})
 
     # 4. Pairing API
     @app.post("/api/pair")
@@ -633,7 +999,7 @@ def create_app(
     @app.get("/api/devices")
     async def api_list_devices(request: Request) -> JSONResponse:
         client_host = request.client.host if request.client is not None else ""
-        if not is_loopback_client(client_host):
+        if not is_trusted_local_request(client_host, request.headers):
             token = _extract_bearer_token(request)
             if not token or not pairing_mgr.validate_token(token):
                 raise HTTPException(
@@ -645,7 +1011,7 @@ def create_app(
     @app.delete("/api/devices/{device_id}")
     async def api_revoke_device(request: Request, device_id: str) -> JSONResponse:
         client_host = request.client.host if request.client is not None else ""
-        if not is_loopback_client(client_host):
+        if not is_trusted_local_request(client_host, request.headers):
             token = _extract_bearer_token(request)
             if not token or not pairing_mgr.validate_token(token):
                 raise HTTPException(
@@ -658,11 +1024,11 @@ def create_app(
             raise HTTPException(status_code=404, detail="Dispositivo não encontrado.")
         return JSONResponse({"status": "ok", "revoked": True, "deviceId": device_id})
 
-    # 5. Media state API (requires authentication when accessed from LAN)
+    # 5. Media state & screen monitor APIs (require auth unless trusted local)
     @app.get("/api/state")
     async def get_state(request: Request) -> JSONResponse:
         client_host = request.client.host if request.client is not None else ""
-        if not is_loopback_client(client_host):
+        if not is_trusted_local_request(client_host, request.headers):
             token = _extract_bearer_token(request)
             if not token or not pairing_mgr.validate_token(token):
                 raise HTTPException(
@@ -672,6 +1038,20 @@ def create_app(
 
         state = await coordinator.build_state()
         return JSONResponse(state.model_dump())
+
+    @app.get("/api/screen/monitors")
+    async def get_screen_monitors(request: Request) -> JSONResponse:
+        client_host = request.client.host if request.client is not None else ""
+        if not is_trusted_local_request(client_host, request.headers):
+            token = _extract_bearer_token(request)
+            if not token or not pairing_mgr.validate_token(token):
+                raise HTTPException(
+                    status_code=401,
+                    detail="Token de autorização ausente ou inválido.",
+                )
+
+        monitors = await active_screen.list_monitors()
+        return JSONResponse({"monitors": [m.to_dict() for m in monitors]})
 
     @app.get("/health")
     async def health() -> JSONResponse:
@@ -686,6 +1066,8 @@ def create_app(
                 "extensionConnected": coordinator.extension_connected,
                 "extensionId": cfg.extension_id,
                 "remoteInputEnabled": coordinator.remote_input_enabled,
+                "tailscaleEnabled": coordinator.tailscale_enabled,
+                "screenMirrorAvailable": True,
             }
         )
 
@@ -693,10 +1075,10 @@ def create_app(
     @app.websocket("/ws")
     async def control_websocket(websocket: WebSocket) -> None:
         client_host = websocket.client.host if websocket.client is not None else ""
-        is_loopback = is_loopback_client(client_host)
+        is_local = is_trusted_local_request(client_host, websocket.headers)
 
-        # In localhost-only mode, block non-loopback completely
-        if not cfg.lan_mode and not is_loopback:
+        # In localhost-only mode, block non-local completely
+        if not cfg.lan_mode and not is_local:
             logger.warning(
                 "WebSocket /ws rejeitado de %s: modo LAN desativado (--lan necessário)",
                 client_host,
@@ -708,7 +1090,7 @@ def create_app(
         raw_host = websocket.headers.get("host")
         if raw_host:
             clean_host = raw_host.strip().lower()
-            allowed_hosts = cfg.get_allowed_hosts()
+            allowed_hosts = _get_effective_allowed_hosts()
             if clean_host not in allowed_hosts:
                 logger.warning(
                     "WebSocket /ws rejeitado de %s: cabeçalho Host inválido %r (permitidos: %s)",
@@ -722,7 +1104,7 @@ def create_app(
         # Validate Origin header
         raw_origin = websocket.headers.get("origin")
         origin = normalize_origin(raw_origin)
-        allowed_origins = cfg.get_allowed_ws_origins()
+        allowed_origins = _get_effective_allowed_ws_origins()
         if not origin or origin not in allowed_origins:
             logger.warning(
                 "WebSocket /ws rejeitado de %s: Origin inválida ou ausente %r",
@@ -735,94 +1117,16 @@ def create_app(
         await websocket.accept()
 
         authenticated_device_id: str | None = None
-
-        # Non-loopback LAN connections must authenticate via first frame
-        if not is_loopback:
-            try:
-                raw_auth_text = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
-            except TimeoutError:
-                logger.warning(
-                    "WebSocket /ws rejeitado de %s: timeout de 5.0s aguardando auth na LAN",
-                    client_host,
-                )
-                with contextlib.suppress(Exception):
-                    err = ErrorMessage(
-                        code="pairing_required",
-                        message="Tempo limite de autenticação expirado. Pareie o dispositivo.",
-                    )
-                    await websocket.send_text(err.model_dump_json())
-                    await websocket.close(
-                        code=4001,
-                        reason="Authentication timeout",
-                    )
-                return
-            except WebSocketDisconnect:
-                logger.info(
-                    "WebSocket /ws desconectado pelo cliente %s durante handshake", client_host
-                )
-                return
-
-            try:
-                raw_auth_json = json.loads(raw_auth_text)
-            except json.JSONDecodeError:
-                logger.warning(
-                    "WebSocket /ws rejeitado de %s: frame de auth não é JSON válido: %r",
-                    client_host,
-                    raw_auth_text[:120],
-                )
-                with contextlib.suppress(Exception):
-                    err = ErrorMessage(
-                        code="invalid_json",
-                        message="Payload de autenticação não é JSON válido.",
-                    )
-                    await websocket.send_text(err.model_dump_json())
-                    await websocket.close(
-                        code=4001,
-                        reason="Invalid JSON auth frame",
-                    )
-                return
-
-            if (
-                not isinstance(raw_auth_json, dict)
-                or raw_auth_json.get("type") != "auth"
-                or not raw_auth_json.get("token")
-            ):
-                logger.warning(
-                    "WebSocket /ws rejeitado de %s: frame de auth inválido ou sem token: %r",
-                    client_host,
-                    raw_auth_text[:120],
-                )
-                err = ErrorMessage(
-                    code="pairing_required",
-                    message="Dispositivo não autenticado. Autenticação obrigatória na LAN.",
-                )
-                await websocket.send_text(err.model_dump_json())
-                await websocket.close(code=4001, reason="Pairing required")
-                return
-
-            token = str(raw_auth_json["token"])
-            device = pairing_mgr.validate_token(token)
-            if device is None:
-                logger.warning(
-                    "WebSocket /ws rejeitado de %s: token inválido, revogado ou inexistente",
-                    client_host,
-                )
-                err = ErrorMessage(
-                    code="pairing_required",
-                    message="Token de pareamento inválido ou revogado. Pareie novamente.",
-                )
-                await websocket.send_text(err.model_dump_json())
-                await websocket.close(code=4001, reason="Pairing token invalid or revoked")
-                return
-
-            authenticated_device_id = device.id
-            device_websockets[device.id].add(websocket)
-            logger.info(
-                "WebSocket /ws autenticado com sucesso para dispositivo '%s' (ID: %s, IP: %s)",
-                device.name,
-                device.id,
+        if not is_local:
+            authenticated_device_id = await _authenticate_ws_client(
+                websocket,
+                pairing_mgr,
+                device_websockets,
                 client_host,
+                "/ws",
             )
+            if authenticated_device_id is None:
+                return
 
         coordinator.register_client(websocket)
         try:
@@ -842,7 +1146,7 @@ def create_app(
                     continue
 
                 if isinstance(raw, dict) and raw.get("type") == "auth":
-                    # Handle optional re-auth or loopback auth frame gracefully
+                    # Handle optional re-auth or local auth frame gracefully
                     token = str(raw.get("token") or "")
                     device = pairing_mgr.validate_token(token)
                     if device is not None:
@@ -860,11 +1164,202 @@ def create_app(
             if authenticated_device_id:
                 device_websockets[authenticated_device_id].discard(websocket)
 
-    # 7. Chrome extension WebSocket endpoint (strictly loopback only)
+    # 7. WebSocket lightweight screen mirror endpoint (on-demand JPEG frames)
+    @app.websocket("/ws/screen")
+    async def screen_websocket(websocket: WebSocket) -> None:
+        client_host = websocket.client.host if websocket.client is not None else ""
+        is_local = is_trusted_local_request(client_host, websocket.headers)
+
+        if not cfg.lan_mode and not is_local:
+            logger.warning(
+                "WebSocket /ws/screen rejeitado de %s: modo LAN desativado",
+                client_host,
+            )
+            await websocket.close(code=1008, reason="Acesso permitido apenas via localhost")
+            return
+
+        raw_host = websocket.headers.get("host")
+        if raw_host:
+            clean_host = raw_host.strip().lower()
+            allowed_hosts = _get_effective_allowed_hosts()
+            if clean_host not in allowed_hosts:
+                logger.warning(
+                    "WebSocket /ws/screen rejeitado de %s: Host inválido %r",
+                    client_host,
+                    raw_host,
+                )
+                await websocket.close(code=1008, reason="Host inválido (DNS rebinding mitigado)")
+                return
+
+        raw_origin = websocket.headers.get("origin")
+        origin = normalize_origin(raw_origin)
+        allowed_origins = _get_effective_allowed_ws_origins()
+        if not origin or origin not in allowed_origins:
+            logger.warning(
+                "WebSocket /ws/screen rejeitado de %s: Origin inválida %r",
+                client_host,
+                raw_origin,
+            )
+            await websocket.close(code=1008, reason="Origin não autorizada")
+            return
+
+        if len(active_screen_clients) >= MAX_SCREEN_CLIENTS:
+            logger.warning("WebSocket /ws/screen rejeitado: limite de clientes simultâneos")
+            await websocket.close(code=1013, reason="Limite de visualizações simultâneas atingido.")
+            return
+
+        await websocket.accept()
+
+        authenticated_device_id: str | None = None
+        if not is_local:
+            authenticated_device_id = await _authenticate_ws_client(
+                websocket,
+                pairing_mgr,
+                device_websockets,
+                client_host,
+                "/ws/screen",
+            )
+            if authenticated_device_id is None:
+                return
+
+        active_screen_clients.add(websocket)
+        monitors = await active_screen.list_monitors()
+        initial_monitor = next(
+            (m.id for m in monitors if m.primary),
+            monitors[0].id if monitors else 1,
+        )
+        stream_cfg: dict[str, Any] = {
+            "monitor": initial_monitor,
+            "fps": 8,
+            "quality": 60,
+            "max_width": 960,
+            "paused": False,
+            "dirty": True,
+        }
+        wake_event = asyncio.Event()
+        stop_event = asyncio.Event()
+
+        async def _stream_loop() -> None:
+            last_digest: bytes | None = None
+            last_sent_at = 0.0
+            last_monitor: int | None = None
+            while not stop_event.is_set():
+                if stream_cfg["paused"]:
+                    wake_event.clear()
+                    await wake_event.wait()
+                    continue
+
+                tick_start = time.monotonic()
+                target_mon = int(stream_cfg["monitor"])
+                frame = await active_screen.capture_jpeg(
+                    monitor_id=target_mon,
+                    max_width=int(stream_cfg["max_width"]),
+                    quality=int(stream_cfg["quality"]),
+                    include_cursor=True,
+                )
+                if stop_event.is_set():
+                    break
+
+                if frame is not None:
+                    now = time.monotonic()
+                    changed = (
+                        stream_cfg["dirty"]
+                        or frame.monitor_id != last_monitor
+                        or frame.digest != last_digest
+                        or (now - last_sent_at) >= 2.0
+                    )
+                    if changed:
+                        stream_cfg["dirty"] = False
+                        try:
+                            await asyncio.wait_for(
+                                websocket.send_bytes(frame.jpeg_bytes),
+                                timeout=3.0,
+                            )
+                        except Exception:  # noqa: BLE001
+                            stop_event.set()
+                            break
+                        last_digest = frame.digest
+                        last_sent_at = now
+                        last_monitor = frame.monitor_id
+
+                interval = 1.0 / max(1, int(stream_cfg["fps"]))
+                sleep_for = max(0.02, interval - (time.monotonic() - tick_start))
+                wake_event.clear()
+                if not stream_cfg["dirty"] and not stop_event.is_set():
+                    with contextlib.suppress(TimeoutError):
+                        await asyncio.wait_for(wake_event.wait(), timeout=sleep_for)
+
+        stream_task: asyncio.Task[None] | None = None
+        try:
+            meta_payload = {
+                "v": 1,
+                "type": "screen_meta",
+                "monitors": [m.to_dict() for m in monitors],
+                "activeMonitor": initial_monitor,
+                "fps": stream_cfg["fps"],
+                "quality": stream_cfg["quality"],
+                "maxWidth": stream_cfg["max_width"],
+                "paused": False,
+            }
+            await websocket.send_text(json.dumps(meta_payload))
+            stream_task = asyncio.create_task(_stream_loop())
+
+            while not stop_event.is_set():
+                text = await websocket.receive_text()
+                try:
+                    raw = json.loads(text)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(raw, dict):
+                    continue
+
+                msg_type = raw.get("type")
+                if msg_type == "auth":
+                    token = str(raw.get("token") or "")
+                    device = pairing_mgr.validate_token(token)
+                    if device is not None:
+                        authenticated_device_id = device.id
+                        device_websockets[device.id].add(websocket)
+                    continue
+
+                if msg_type == "ping":
+                    req_id = raw.get("requestId")
+                    await websocket.send_text(
+                        PongMessage(requestId=str(req_id) if req_id else None).model_dump_json()
+                    )
+                    continue
+
+                if msg_type == "screen_config":
+                    if isinstance(raw.get("monitor"), int):
+                        stream_cfg["monitor"] = max(1, min(16, int(raw["monitor"])))
+                    if isinstance(raw.get("fps"), (int, float)):
+                        stream_cfg["fps"] = max(1, min(15, int(raw["fps"])))
+                    if isinstance(raw.get("quality"), (int, float)):
+                        stream_cfg["quality"] = max(25, min(85, int(raw["quality"])))
+                    if isinstance(raw.get("maxWidth"), (int, float)):
+                        stream_cfg["max_width"] = max(320, min(1280, int(raw["maxWidth"])))
+                    if isinstance(raw.get("paused"), bool):
+                        stream_cfg["paused"] = raw["paused"]
+                    stream_cfg["dirty"] = True
+                    wake_event.set()
+        except WebSocketDisconnect:
+            pass
+        finally:
+            stop_event.set()
+            wake_event.set()
+            if stream_task is not None:
+                stream_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await stream_task
+            active_screen_clients.discard(websocket)
+            if authenticated_device_id:
+                device_websockets[authenticated_device_id].discard(websocket)
+
+    # 8. Chrome extension WebSocket endpoint (strictly unproxied loopback only)
     @app.websocket("/ws/extension")
     async def extension_websocket(websocket: WebSocket) -> None:
         client_host = websocket.client.host if websocket.client is not None else ""
-        if not is_loopback_client(client_host):
+        if not is_trusted_local_request(client_host, websocket.headers):
             logger.warning(
                 "WebSocket /ws/extension rejeitado de %s: aceita apenas conexões locais",
                 client_host,

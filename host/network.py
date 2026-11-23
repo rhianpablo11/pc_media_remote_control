@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import socket
+import subprocess
 from dataclasses import dataclass
 from typing import Any
 
@@ -60,6 +62,83 @@ def is_private_ipv4(ip: str) -> bool:
         return True
     # 192.168.0.0 - 192.168.255.255
     return bool(octets[0] == 192 and octets[1] == 168)
+
+
+def is_tailscale_ipv4(ip: str) -> bool:
+    """Return True if ip is inside Tailscale's CGNAT range 100.64.0.0/10."""
+    parts = ip.strip().split(".")
+    if len(parts) != 4:
+        return False
+    try:
+        octets = [int(p) for p in parts]
+    except ValueError:
+        return False
+    if any(o < 0 or o > 255 for o in octets):
+        return False
+    return octets[0] == 100 and 64 <= octets[1] <= 127
+
+
+@dataclass(frozen=True, slots=True)
+class TailscaleInfo:
+    """Detected Tailscale interface and MagicDNS metadata."""
+
+    available: bool
+    ip: str | None = None
+    dns_name: str | None = None
+
+
+def detect_tailscale_info(
+    interfaces: list[LanInterface] | None = None,
+    query_cli: bool = True,
+) -> TailscaleInfo:
+    """Detect active Tailscale IPv4 (100.64.0.0/10) and optional MagicDNS hostname."""
+    candidates = interfaces if interfaces is not None else list_lan_interfaces()
+
+    ts_ip: str | None = None
+    for iface in candidates:
+        if "tailscale" in iface.name.lower() and is_tailscale_ipv4(iface.ip):
+            ts_ip = iface.ip
+            break
+    if ts_ip is None:
+        for iface in candidates:
+            if is_tailscale_ipv4(iface.ip):
+                ts_ip = iface.ip
+                break
+
+    dns_name: str | None = None
+    if query_cli:
+        try:
+            res = subprocess.run(
+                ["tailscale", "status", "--json"],
+                capture_output=True,
+                text=True,
+                timeout=1.5,
+                check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                data = json.loads(res.stdout)
+                self_node = data.get("Self") if isinstance(data, dict) else None
+                if isinstance(self_node, dict):
+                    raw_dns = str(self_node.get("DNSName") or "").strip().rstrip(".").lower()
+                    if raw_dns:
+                        dns_name = raw_dns
+                    if ts_ip is None:
+                        ips = self_node.get("TailscaleIPs")
+                        if isinstance(ips, list):
+                            for candidate in ips:
+                                cand_str = str(candidate).strip()
+                                if is_tailscale_ipv4(cand_str):
+                                    ts_ip = cand_str
+                                    break
+        except Exception:  # noqa: BLE001
+            pass
+
+    return TailscaleInfo(
+        available=bool(ts_ip or dns_name),
+        ip=ts_ip,
+        dns_name=dns_name,
+    )
 
 
 def is_virtual_adapter_name(adapter_name: str) -> bool:

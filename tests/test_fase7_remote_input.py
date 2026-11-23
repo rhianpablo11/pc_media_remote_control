@@ -60,6 +60,10 @@ class FakeInputProvider:
         self.calls.append(("move_mouse", dx, dy))
         return self.should_succeed
 
+    async def move_mouse_abs(self, x: float, y: float, monitor: int = 1) -> bool:
+        self.calls.append(("move_mouse_abs", round(x, 4), round(y, 4), monitor))
+        return self.should_succeed
+
     async def click_mouse(self, button: MouseButton, double: bool = False) -> bool:
         self.calls.append(("click_mouse", button, double))
         return self.should_succeed

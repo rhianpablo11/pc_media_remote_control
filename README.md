@@ -26,6 +26,8 @@ Transforme seu PC ou notebook Windows em uma central de mídia controlada direta
 | **Tela Cheia e Anúncios** | Botão para alternar **Tela cheia** na tela **Tocando**, opção de abrir vídeos já em tela cheia com restauração automática ao trocar de vídeo e botão **Pular anúncio** quando um anúncio está ativo no YouTube. |
 | **Mixer de Volume Completo** | Controle em tempo real do **Volume Geral** do Windows, volume e silenciamento individual por **aba do Chrome** e volume por **aplicativo Windows** ativo via Core Audio (`pycaw`). |
 | **Touchpad e Teclado Remoto** | Aba **Controle** com touchpad redimensionável (`P`/`M`/`G`/`Max` + alça de ajuste livre), sensibilidade ajustável, gestos de 1 e 2 dedos, rolagem dedicada e trava de arrastar; teclado em modo lote ou tempo real (com acentuação em português) e atalhos (`Alt+Tab`, `Tela (F)`, `Copiar`, `Colar`, `Win`). |
+| **Espelho Leve da Tela** | Card opcional (**Desligado** por padrão) na aba **Controle** para ver a tela do PC ao vivo em JPEG (`Eco` / `Normal` / `Fluido`), trocar de monitor, expandir em tela cheia e tocar direto na imagem (`Toque na tela` ou `Só ver`), mantendo touchpad e teclado separados funcionando juntos. |
+| **Acesso Remoto via Tailscale (opcional)** | Modo opt-in desligado por padrão (bandeja do Windows, `/pair#tailscale` ou `--tailscale`) para operar o PC fora da rede Wi-Fi doméstica pela sua rede privada Tailscale, mantendo pareamento obrigatório e compatibilidade com `tailscale serve` HTTPS. |
 | **Interface Mobile-First (PWA)** | App React + TypeScript + Tailwind com temas **Claro**, **Escuro** e **Automático**, alvos de toque de pelo menos `44px`, reconexão automática e leitura fluida com uma mão. |
 | **Bandeja do Sistema e Autostart** | Roda em segundo plano junto ao relógio do Windows com menu rápido para QR Code, dispositivos pareados, extensão Chrome, logs e opção **Iniciar com o Windows**. |
 
@@ -108,7 +110,7 @@ Para deixar a instalação local quase imediata sem precisar procurar pastas ocu
 1. **Tocando:** exibe capa/miniatura, título, canal/artista, status em tempo real, barra de progresso, **Play/Pause**, **±10s**, **Anterior/Próximo**, **Pular anúncio** (quando há anúncio ativo), toggle de **Tela cheia**, seletor de **Sessões** (alternar entre abas do Chrome e apps do Windows) e **Volume Geral**.
 2. **Buscar:** campo de busca no YouTube sem precisar olhar o monitor, resultados com miniatura, canal, duração/`AO VIVO` e visualizações, botões **Tocar agora** (reaproveita a aba controlada ou abre uma nova) e **Nova aba**, opção **Abrir vídeo em tela cheia** e histórico recente salvo localmente no aparelho.
 3. **Volume:** controle do **Volume Geral**, slider e mute de cada **aba do Chrome** individualmente e de cada **aplicativo Windows** ativo.
-4. **Controle:** touchpad e teclado remoto. Por segurança, começa bloqueado — ative pela própria tela (**Ativar Mouse e Teclado**), pela aba **Mais** ou pela bandeja do Windows. Oferece sensibilidade (`0.9x`, `1.5x`, `2.2x`), presets de altura (`P`/`M`/`G`/`Max`) mais alça de redimensionamento livre, 1 dedo para mover/tocar, 2 dedos para rolar ou clique direito, faixa lateral de rolagem, botão **Arrastar/Soltar**, teclado em **Enviar texto** ou **Tempo real** e atalhos rápidos (`Esc`, `Tab`, `Enter`, setas, `Espaço`, `Alt+Tab`, `Tela (F)`, `Copiar`, `Colar`, `Win`).
+4. **Controle:** exibe o card opcional **Espelho da Tela** (desligado por padrão — toque em **Ver tela** para acompanhar o monitor ao vivo em **Eco**, **Normal** ou **Fluido**, alternar entre monitores, abrir em tela cheia com **Expandir** e alternar entre **Toque na tela** ou **Só ver**) acima dos controles separados de **Touchpad** e **Teclado Remoto**. Por segurança, o controle remoto de entrada começa bloqueado — ative pela própria tela (**Ativar Mouse e Teclado**), pela aba **Mais** ou pela bandeja do Windows. O touchpad oferece sensibilidade (`0.9x`, `1.5x`, `2.2x`), presets de altura (`P`/`M`/`G`/`Max`) mais alça de redimensionamento livre, 1 dedo para mover/tocar, 2 dedos para rolar ou clique direito, faixa lateral de rolagem, botão **Arrastar/Soltar**, teclado em **Enviar texto** ou **Tempo real** e atalhos rápidos (`Esc`, `Tab`, `Enter`, setas, `Espaço`, `Alt+Tab`, `Tela (F)`, `Copiar`, `Colar`, `Win`).
 5. **Mais:** colar uma URL qualquer para abrir no Chrome, teclas globais de fallback (VLC), interruptor de segurança do controle remoto, **Diagnóstico de Conexão** (URL WS, RTT, latência do host vs Wi-Fi), lista de **Dispositivos Pareados** com revogação imediata e escolha de tema (**Automático**, **Claro**, **Escuro**).
 
 ### Menu na Bandeja do Sistema (Windows)
@@ -120,6 +122,7 @@ Ao clicar com o botão direito no ícone perto do relógio:
 - **`🎵 Abrir Central de Mídia`:** abre a interface web principal no navegador do PC.
 - **`🔒 Dispositivos Pareados`:** exibe os aparelhos autorizados e permite revogação em `/pair`.
 - **`🖱️ Mouse e Teclado Remoto`:** liga ou desliga a permissão de entrada remota.
+- **`🌐 Acesso Remoto (Tailscale)`:** ativa ou desativa o acesso opcional fora da rede local pelo seu IP/MagicDNS Tailscale.
 - **Iniciar com o Windows:** habilita/desabilita autostart estável em `%LOCALAPPDATA%\PCMediaControl\PCMediaControl.exe`.
 - **`🧩 Abrir pasta da extensão...`:** abre `%LOCALAPPDATA%\PCMediaControl\extension` com instruções de instalação (`LEIA-ME.txt`).
 - **`📂 Abrir pasta de logs`:** abre `%LOCALAPPDATA%\PCMediaControl\logs` com os logs rotativos.
@@ -182,6 +185,19 @@ Em redes corporativas, públicas ou universitárias, o roteador pode bloquear co
 
 - **Sintoma:** `http://<IP-DO-PC>:8765` não abre no celular mesmo com a rede em **Privada** e o Firewall liberado.
 - **Plano B (Hotspot Móvel):** ative o **Hotspot móvel** do Windows (ou o roteador Wi-Fi do celular), conecte PC e celular nessa rede direta e gere um novo QR Code pelo menu da bandeja (`📱 Parear Celular (QR Code)...`).
+
+### 5. Acesso remoto fora da Wi-Fi (Tailscale — opcional)
+
+O app funciona **apenas na rede Wi-Fi local por padrão**. Se quiser controlar o PC ou ver o espelho da tela fora de casa pela internet de forma privada (WireGuard sem abrir portas no roteador):
+
+1. Instale e entre no [Tailscale](https://tailscale.com/) no PC Windows e no celular usando a mesma conta.
+2. No PC, ative **`🌐 Acesso Remoto (Tailscale)`** no ícone da bandeja (ou na seção correspondente em `/pair#tailscale`, ou iniciando com `--tailscale`).
+3. Abra `http://<IP-TAILSCALE-DO-PC>:8765` no celular e pareie com o PIN/QR Code exibido em `/pair`.
+4. *(Opcional — HTTPS e PWA nativo no Android)*: caso seu *tailnet* tenha HTTPS habilitado, rode no PC:
+   ```powershell
+   tailscale serve --bg 8765
+   ```
+   E acesse `https://<SEU-PC>.<SUA-TAILNET>.ts.net` no celular. Mesmo via proxy local do `tailscale serve`, o host detecta cabeçalhos de proxy e mantém o pareamento obrigatório e `/pair` bloqueado fora do PC local.
 
 ---
 

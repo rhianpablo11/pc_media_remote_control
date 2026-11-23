@@ -103,6 +103,9 @@ class HostStateCoordinator:
         input_provider: RemoteInputProvider | None = None,
         remote_input_enabled: bool = False,
         on_remote_input_change: Callable[[bool], None] | None = None,
+        tailscale_enabled: bool = False,
+        on_tailscale_change: Callable[[bool], None] | None = None,
+        screen_mirror_available: bool = True,
     ) -> None:
         self._providers: list[SessionProvider] = list(providers)
         self._providers_by_source: dict[str, SessionProvider] = {
@@ -113,6 +116,9 @@ class HostStateCoordinator:
         self._input_provider = input_provider
         self._remote_input_enabled: bool = bool(remote_input_enabled)
         self._on_remote_input_change = on_remote_input_change
+        self._tailscale_enabled: bool = bool(tailscale_enabled)
+        self._on_tailscale_change = on_tailscale_change
+        self._screen_mirror_available: bool = bool(screen_mirror_available)
         self._selected_session_id: str | None = None
         self._clients: set[WebSocket] = set()
         self._last_state_json: str | None = None
@@ -137,6 +143,22 @@ class HostStateCoordinator:
                 self._on_remote_input_change(flag)
             except Exception:  # noqa: BLE001
                 logger.exception("Falha ao persistir configuração de mouse/teclado remoto")
+        return flag
+
+    @property
+    def tailscale_enabled(self) -> bool:
+        """Whether optional Tailscale remote access is currently enabled on the host."""
+        return self._tailscale_enabled
+
+    def set_tailscale_enabled(self, enabled: bool) -> bool:
+        """Enable or disable optional Tailscale remote host access cleanly (PC-only)."""
+        flag = bool(enabled)
+        self._tailscale_enabled = flag
+        if self._on_tailscale_change is not None:
+            try:
+                self._on_tailscale_change(flag)
+            except Exception:  # noqa: BLE001
+                logger.exception("Falha ao persistir configuração de acesso remoto Tailscale")
         return flag
 
     @property
@@ -229,6 +251,8 @@ class HostStateCoordinator:
             audioSessions=[audio_app_to_payload(a) for a in audio_apps],
             extensionConnected=self.extension_connected,
             remoteInputEnabled=self._remote_input_enabled,
+            tailscaleEnabled=self._tailscale_enabled,
+            screenMirrorAvailable=self._screen_mirror_available,
         )
 
     def _resolve_active_session_id(self, sessions: list[MediaSessionInfo]) -> str | None:
@@ -563,6 +587,13 @@ class HostStateCoordinator:
         if action == "mouse_move":
             ok = await self._input_provider.move_mouse(msg.dx or 0, msg.dy or 0)
             return (ok, None if ok else "mouse_move_failed")
+        if action == "mouse_move_abs":
+            ok = await self._input_provider.move_mouse_abs(
+                msg.x or 0.0,
+                msg.y or 0.0,
+                msg.monitor or 1,
+            )
+            return (ok, None if ok else "mouse_move_abs_failed")
         if action == "mouse_click":
             ok = await self._input_provider.click_mouse(msg.button or "left", msg.double)
             return (ok, None if ok else "mouse_click_failed")

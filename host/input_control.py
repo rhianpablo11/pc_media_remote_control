@@ -24,6 +24,13 @@ MOUSEEVENTF_MIDDLEDOWN = 0x0020
 MOUSEEVENTF_MIDDLEUP = 0x0040
 MOUSEEVENTF_WHEEL = 0x0800
 MOUSEEVENTF_HWHEEL = 0x1000
+MOUSEEVENTF_VIRTUALDESK = 0x4000
+MOUSEEVENTF_ABSOLUTE = 0x8000
+
+SM_XVIRTUALSCREEN = 76
+SM_YVIRTUALSCREEN = 77
+SM_CXVIRTUALSCREEN = 78
+SM_CYVIRTUALSCREEN = 79
 
 KEYEVENTF_EXTENDEDKEY = 0x0001
 KEYEVENTF_KEYUP = 0x0002
@@ -250,6 +257,62 @@ def send_mouse_move(dx: int, dy: int) -> bool:
     return _send_inputs([_make_mouse_input(dx=ix, dy=iy, flags=MOUSEEVENTF_MOVE)])
 
 
+def compute_virtual_desktop_abs_coords(
+    nx: float,
+    ny: float,
+    monitor_rect: tuple[int, int, int, int],
+    virtual_rect: tuple[int, int, int, int],
+) -> tuple[int, int]:
+    """Map normalized (0..1) coordinates within monitor_rect to Win32 0..65535 virtual desktop."""
+    cx = max(0.0, min(1.0, float(nx)))
+    cy = max(0.0, min(1.0, float(ny)))
+    ml, mt, mw, mh = monitor_rect
+    vx, vy, vw, vh = virtual_rect
+    px = ml + cx * max(1, mw - 1)
+    py = mt + cy * max(1, mh - 1)
+    ax = round(((px - vx) / max(1, vw - 1)) * 65535)
+    ay = round(((py - vy) / max(1, vh - 1)) * 65535)
+    return max(0, min(65535, int(ax))), max(0, min(65535, int(ay)))
+
+
+def get_virtual_desktop_rect() -> tuple[int, int, int, int]:
+    """Query the Windows virtual desktop bounding box via GetSystemMetrics."""
+    u32 = _get_user32()
+    if u32 is None or not hasattr(u32, "GetSystemMetrics"):
+        return (0, 0, 1920, 1080)
+    try:
+        vx = int(u32.GetSystemMetrics(SM_XVIRTUALSCREEN))
+        vy = int(u32.GetSystemMetrics(SM_YVIRTUALSCREEN))
+        vw = int(u32.GetSystemMetrics(SM_CXVIRTUALSCREEN))
+        vh = int(u32.GetSystemMetrics(SM_CYVIRTUALSCREEN))
+        if vw > 0 and vh > 0:
+            return (vx, vy, vw, vh)
+    except Exception:
+        pass
+    return (0, 0, 1920, 1080)
+
+
+def send_mouse_move_abs(
+    nx: float,
+    ny: float,
+    monitor_rect: tuple[int, int, int, int] | None = None,
+    virtual_rect: tuple[int, int, int, int] | None = None,
+) -> bool:
+    """Move mouse cursor to normalized monitor position across the virtual desktop."""
+    v_rect = virtual_rect if virtual_rect is not None else get_virtual_desktop_rect()
+    m_rect = monitor_rect if monitor_rect is not None else v_rect
+    ax, ay = compute_virtual_desktop_abs_coords(nx, ny, m_rect, v_rect)
+    return _send_inputs(
+        [
+            _make_mouse_input(
+                dx=ax,
+                dy=ay,
+                flags=MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
+            )
+        ]
+    )
+
+
 def send_mouse_click(button: MouseButton = "left", double: bool = False) -> bool:
     """Click a mouse button once or twice via SendInput."""
     flags = _MOUSE_FLAGS.get(button)
@@ -332,8 +395,31 @@ def send_unicode_text(text: str) -> bool:
 class WindowsInputProvider:
     """Async RemoteInputProvider implementation backed by Win32 SendInput."""
 
+    def __init__(self, screen_provider: Any | None = None) -> None:
+        self._screen_provider = screen_provider
+
+    def set_screen_provider(self, provider: Any | None) -> None:
+        """Attach or replace the screen capture provider used for multi-monitor bounds."""
+        self._screen_provider = provider
+
     async def move_mouse(self, dx: int, dy: int) -> bool:
         return send_mouse_move(dx, dy)
+
+    async def move_mouse_abs(self, x: float, y: float, monitor: int = 1) -> bool:
+        monitor_rect: tuple[int, int, int, int] | None = None
+        virtual_rect: tuple[int, int, int, int] | None = None
+        if self._screen_provider is not None:
+            try:
+                monitors = await self._screen_provider.list_monitors()
+                vbounds = await self._screen_provider.get_virtual_bounds()
+                virtual_rect = (vbounds.left, vbounds.top, vbounds.width, vbounds.height)
+                if monitors:
+                    target = next((m for m in monitors if m.id == monitor), monitors[0])
+                    monitor_rect = (target.left, target.top, target.width, target.height)
+            except Exception:
+                monitor_rect = None
+                virtual_rect = None
+        return send_mouse_move_abs(x, y, monitor_rect=monitor_rect, virtual_rect=virtual_rect)
 
     async def click_mouse(self, button: MouseButton, double: bool = False) -> bool:
         if double:

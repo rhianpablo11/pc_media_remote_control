@@ -76,6 +76,8 @@ export interface StateMessage {
   audioSessions: AudioSession[];
   extensionConnected: boolean;
   remoteInputEnabled?: boolean;
+  tailscaleEnabled?: boolean;
+  screenMirrorAvailable?: boolean;
 }
 
 export interface ErrorMessage {
@@ -110,6 +112,7 @@ export type MouseButton = "left" | "right" | "middle";
 export type ModifierKey = "ctrl" | "alt" | "shift" | "win";
 export type InputAction =
   | "mouse_move"
+  | "mouse_move_abs"
   | "mouse_click"
   | "mouse_down"
   | "mouse_up"
@@ -121,12 +124,38 @@ export interface InputMessagePayload {
   action: InputAction;
   dx?: number;
   dy?: number;
+  x?: number;
+  y?: number;
+  monitor?: number;
   button?: MouseButton;
   double?: boolean;
   text?: string;
   key?: string;
   modifiers?: ModifierKey[];
 }
+
+export interface ScreenMonitorInfo {
+  id: number;
+  name: string;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  primary: boolean;
+}
+
+export interface ScreenMetaMessage {
+  v: 1;
+  type: "screen_meta";
+  monitors: ScreenMonitorInfo[];
+  activeMonitor: number;
+  fps: number;
+  quality: number;
+  maxWidth: number;
+  paused?: boolean;
+}
+
+export type ScreenQualityPreset = "eco" | "normal" | "fluid";
 
 export interface SearchResultItem {
   id: string;

@@ -205,6 +205,7 @@ export function App() {
           <div key="remote" className="view-enter">
             <RemoteInputView
               remoteInputEnabled={state?.remoteInputEnabled ?? false}
+              screenMirrorAvailable={state?.screenMirrorAvailable ?? true}
               onSendInput={sendInput}
               onSetRemoteInputEnabled={setRemoteInputEnabled}
               onOpenSettings={() => setActiveTab("more")}
@@ -221,6 +222,7 @@ export function App() {
               onCommand={sendCommand}
               onReconnect={reconnectNow}
               remoteInputEnabled={state?.remoteInputEnabled ?? false}
+              tailscaleEnabled={state?.tailscaleEnabled ?? false}
               onSetRemoteInputEnabled={setRemoteInputEnabled}
               pairedDevices={pairedDevices}
               onRefreshDevices={refreshPairedDevices}

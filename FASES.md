@@ -1,6 +1,6 @@
 # Fases — PC Media Control
 
-**Fase atual: 7**
+**Fase atual: 8**
 
 Regra: concluir a fase, marcar os checkboxes, commitar, parar e reportar. Só avançar quando o usuário autorizar.
 
@@ -86,5 +86,10 @@ Objetivo: descobrir o que o Windows realmente nos entrega, antes de construir qu
 - [x] Tela de touchpad (mover cursor, clique, rolagem) e teclado de texto *(aba "Controle" no PWA com touchpad multi-gesto, barra de rolagem lateral, trava de arrastar, teclado em lote + tempo real e atalhos rápidos via Win32 `SendInput` + `KEYEVENTF_UNICODE`)*
 - [x] Ligado/desligado nas configurações por segurança *(desativado por padrão, persistido em `%LOCALAPPDATA%\PCMediaControl\settings.json` com controle autoritativo no host e interruptores no PWA, bandeja do Windows e `/pair`)*
 
+## Fase 8 — Espelho Leve da Tela e Acesso Remoto Tailscale (opcional)
+- [x] Stream leve sob demanda de quadros JPEG via WebSocket (`/ws/screen`) usando `mss` + `Pillow`, desenho de cursor, detecção de quadros repetidos, presets (`Eco`, `Normal`, `Fluido`), seletor multi-monitor e pausa automática em segundo plano
+- [x] Toque direto na imagem espelhada (`mouse_move_abs` multi-monitor via Win32 Virtual Desktop `0..65535`, clique, duplo toque, segurar para clique direito, rolagem com 2 dedos e modo tela cheia `Expandir`) mantendo touchpad e teclado separados intactos
+- [x] Suporte opcional e desligado por padrão a Tailscale (`--tailscale`, toggle na bandeja do Windows e seção dedicada em `/pair`) mantendo escolha automática do IP da LAN física e endurecendo a checagem contra proxy (`tailscale serve`) para nunca tratar proxy em loopback como máquina local
+
 ## Futuro
-- Linux (MPRIS), macOS, cliente iOS testado, app nativo, múltiplos notebooks.
+- Streaming de vídeo/áudio completo (WebRTC/DXGI de baixa latência), Linux (MPRIS), macOS, cliente iOS testado, app nativo, múltiplos notebooks.

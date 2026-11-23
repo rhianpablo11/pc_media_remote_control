@@ -60,12 +60,16 @@ class SystemTrayApp:
         on_exit: Callable[[], Any] | None = None,
         get_remote_input_enabled: Callable[[], bool] | None = None,
         on_toggle_remote_input: Callable[[bool], Any] | None = None,
+        get_tailscale_enabled: Callable[[], bool] | None = None,
+        on_toggle_tailscale: Callable[[bool], Any] | None = None,
     ) -> None:
         self.settings = settings
         self.pairing_manager = pairing_manager
         self.on_exit_callback = on_exit
         self._get_remote_input_enabled = get_remote_input_enabled
         self._on_toggle_remote_input = on_toggle_remote_input
+        self._get_tailscale_enabled = get_tailscale_enabled
+        self._on_toggle_tailscale = on_toggle_tailscale
         self._icon: Any = None
 
     def _open_url(self, path: str = "/") -> None:
@@ -115,6 +119,22 @@ class SystemTrayApp:
             self._on_toggle_remote_input(not self._is_remote_input_enabled())
         except Exception as exc:  # noqa: BLE001
             logger.warning("Erro ao alternar mouse/teclado remoto na bandeja: %s", exc)
+
+    def _is_tailscale_enabled(self) -> bool:
+        if self._get_tailscale_enabled is None:
+            return False
+        try:
+            return bool(self._get_tailscale_enabled())
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _toggle_tailscale(self, _icon: Any, _item: Any) -> None:
+        if self._on_toggle_tailscale is None:
+            return
+        try:
+            self._on_toggle_tailscale(not self._is_tailscale_enabled())
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Erro ao alternar acesso remoto Tailscale na bandeja: %s", exc)
 
     def _on_exit_clicked(self, _icon: Any, _item: Any) -> None:
         logger.info("Encerramento solicitado pelo menu da bandeja.")
@@ -181,6 +201,12 @@ class SystemTrayApp:
                 self._toggle_remote_input,
                 checked=lambda _item: self._is_remote_input_enabled(),
                 enabled=self._on_toggle_remote_input is not None,
+            ),
+            pystray.MenuItem(
+                "🌐 Acesso Remoto (Tailscale)",
+                self._toggle_tailscale,
+                checked=lambda _item: self._is_tailscale_enabled(),
+                enabled=self._on_toggle_tailscale is not None,
             ),
             pystray.MenuItem(
                 self._get_autostart_label(),
