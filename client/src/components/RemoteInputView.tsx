@@ -8,7 +8,7 @@ import {
   type PointerEvent,
   type TouchEvent,
 } from "react";
-import type { InputMessagePayload, ModifierKey } from "../types";
+import type { InputMessagePayload, ModifierKey, SystemAction } from "../types";
 import { triggerHaptic } from "../utils";
 import {
   ArrowDownIcon,
@@ -30,19 +30,23 @@ interface RemoteInputViewProps {
   onOpenSettings?: () => void;
 }
 
-type SensitivityOption = 0.9 | 1.5 | 2.2;
+type SensitivityOption = 0.6 | 1.0 | 1.5 | 2.2 | 3.0;
 type KeyboardMode = "batch" | "live";
+type ShortcutCategory = "system" | "windows" | "editing";
 
 const SENSITIVITY_KEY = "pc_media_touchpad_sensitivity";
 const PAD_HEIGHT_KEY = "pc_media_touchpad_height";
+const NATURAL_SCROLL_KEY = "pc_media_scroll_natural";
 const MIN_PAD_HEIGHT = 180;
 const MAX_PAD_HEIGHT = 640;
 const DEFAULT_PAD_HEIGHT = 320;
 
 const SENSITIVITY_OPTIONS: { value: SensitivityOption; label: string }[] = [
-  { value: 0.9, label: "0.9x" },
+  { value: 0.6, label: "0.6x" },
+  { value: 1.0, label: "1.0x" },
   { value: 1.5, label: "1.5x" },
   { value: 2.2, label: "2.2x" },
+  { value: 3.0, label: "3.0x" },
 ];
 const PAD_SIZE_PRESETS: { height: number; label: string }[] = [
   { height: 220, label: "P" },
@@ -50,6 +54,14 @@ const PAD_SIZE_PRESETS: { height: number; label: string }[] = [
   { height: 440, label: "G" },
   { height: 560, label: "Max" },
 ];
+
+function loadNaturalScroll(): boolean {
+  try {
+    return localStorage.getItem(NATURAL_SCROLL_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 
 function clampPadHeight(val: number): number {
   return Math.max(MIN_PAD_HEIGHT, Math.min(MAX_PAD_HEIGHT, Math.round(val)));
@@ -73,7 +85,7 @@ function loadPadHeight(): number {
 function loadSensitivity(): SensitivityOption {
   try {
     const raw = Number(localStorage.getItem(SENSITIVITY_KEY));
-    if (raw === 0.9 || raw === 1.5 || raw === 2.2) return raw;
+    if (raw === 0.6 || raw === 1.0 || raw === 1.5 || raw === 2.2 || raw === 3.0) return raw;
   } catch {
     // Ignore storage unavailability
   }
@@ -93,12 +105,18 @@ export function RemoteInputView({
 }: RemoteInputViewProps) {
   const [sensitivity, setSensitivity] = useState<SensitivityOption>(() => loadSensitivity());
   const [padHeight, setPadHeight] = useState<number>(() => loadPadHeight());
+  const [naturalScroll, setNaturalScroll] = useState<boolean>(() => loadNaturalScroll());
   const [dragLocked, setDragLocked] = useState(false);
   const [keyboardMode, setKeyboardMode] = useState<KeyboardMode>("batch");
+  const [shortcutCategory, setShortcutCategory] = useState<ShortcutCategory>("system");
+  const [lockConfirmPending, setLockConfirmPending] = useState(false);
   const [batchText, setBatchText] = useState("");
   const [liveText, setLiveText] = useState("");
 
   const dragLockedRef = useRef(false);
+  const naturalScrollRef = useRef(naturalScroll);
+  naturalScrollRef.current = naturalScroll;
+  const lockTimerRef = useRef<number | null>(null);
   const padHeightRef = useRef(padHeight);
   padHeightRef.current = padHeight;
   const resizeDragRef = useRef({ active: false, startY: 0, startHeight: DEFAULT_PAD_HEIGHT });
@@ -248,6 +266,10 @@ export function RemoteInputView({
 
   useEffect(() => {
     return () => {
+      if (lockTimerRef.current !== null) {
+        window.clearTimeout(lockTimerRef.current);
+        lockTimerRef.current = null;
+      }
       if (rafIdRef.current !== null) {
         window.cancelAnimationFrame(rafIdRef.current);
         rafIdRef.current = null;
@@ -261,16 +283,55 @@ export function RemoteInputView({
 
   const queuePointerMove = (rawDx: number, rawDy: number) => {
     const dist = Math.hypot(rawDx, rawDy);
-    const accel = dist > 14 ? 1.35 : 1.0;
+    const accel = dist > 14 ? 1.45 : 1.0;
     pendingMoveRef.current.dx += rawDx * sensitivity * accel;
     pendingMoveRef.current.dy += rawDy * sensitivity * accel;
     scheduleMotionFlush();
   };
 
   const queuePointerScroll = (rawDx: number, rawDy: number) => {
-    pendingScrollRef.current.dx += rawDx * 4;
-    pendingScrollRef.current.dy += rawDy * 5;
+    const dir = naturalScrollRef.current ? -1 : 1;
+    pendingScrollRef.current.dx += rawDx * 4 * dir;
+    pendingScrollRef.current.dy += rawDy * 5 * dir;
     scheduleMotionFlush();
+  };
+
+  const toggleNaturalScroll = () => {
+    triggerHaptic(6);
+    const next = !naturalScroll;
+    setNaturalScroll(next);
+    try {
+      localStorage.setItem(NATURAL_SCROLL_KEY, next ? "1" : "0");
+    } catch {
+      // Ignore storage error
+    }
+  };
+
+  const sendSystemAction = (systemAction: SystemAction) => {
+    triggerHaptic(10);
+    onSendInput({ action: "system_action", systemAction });
+  };
+
+  const handleLockScreenTap = () => {
+    if (!lockConfirmPending) {
+      triggerHaptic(10);
+      setLockConfirmPending(true);
+      if (lockTimerRef.current !== null) {
+        window.clearTimeout(lockTimerRef.current);
+      }
+      lockTimerRef.current = window.setTimeout(() => {
+        setLockConfirmPending(false);
+        lockTimerRef.current = null;
+      }, 3500);
+      return;
+    }
+    triggerHaptic(16);
+    if (lockTimerRef.current !== null) {
+      window.clearTimeout(lockTimerRef.current);
+      lockTimerRef.current = null;
+    }
+    setLockConfirmPending(false);
+    onSendInput({ action: "system_action", systemAction: "lock_screen" });
   };
 
   const emitTapClick = (button: "left" | "right") => {
@@ -828,6 +889,46 @@ export function RemoteInputView({
             Clique Dir.
           </button>
         </div>
+
+        {/* Precision secondary mouse row */}
+        <div className="mt-2 grid grid-cols-3 gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              triggerHaptic(10);
+              onSendInput({ action: "mouse_click", button: "left", double: true });
+            }}
+            className="touch-key kbd-key rounded-2xl px-2 text-xs font-semibold whitespace-nowrap truncate"
+          >
+            Duplo Clique
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              triggerHaptic(10);
+              onSendInput({ action: "mouse_click", button: "middle" });
+            }}
+            className="touch-key kbd-key rounded-2xl px-2 text-xs font-semibold whitespace-nowrap truncate"
+          >
+            Clique Meio
+          </button>
+
+          <button
+            type="button"
+            aria-pressed={naturalScroll}
+            onClick={toggleNaturalScroll}
+            className="touch-key rounded-2xl px-2 text-[11px] font-semibold whitespace-nowrap truncate"
+            style={{
+              backgroundColor: naturalScroll ? "var(--accent-soft)" : "var(--surface-elevated)",
+              border: "1px solid var(--hairline)",
+              boxShadow: naturalScroll ? "none" : "var(--kbd-bevel)",
+              color: naturalScroll ? "var(--accent-text)" : "var(--text)",
+            }}
+          >
+            {naturalScroll ? "Rolagem: Invertida" : "Rolagem: Normal"}
+          </button>
+        </div>
       </section>
 
       {/* 2. Remote Keyboard card */}
@@ -1059,6 +1160,234 @@ export function RemoteInputView({
             >
               Win
             </button>
+          </div>
+
+          {/* Categorized Windows & System Shortcuts */}
+          <div
+            className="mt-2 border-t pt-3"
+            style={{ borderColor: "var(--hairline)" }}
+          >
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-semibold" style={{ color: "var(--text-secondary)" }}>
+                Atalhos do Windows
+              </span>
+              <div
+                className="inline-flex rounded-xl border p-0.5"
+                role="tablist"
+                aria-label="Categorias de atalhos do Windows"
+                style={{
+                  backgroundColor: "var(--surface-elevated)",
+                  borderColor: "var(--hairline)",
+                }}
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={shortcutCategory === "system"}
+                  onClick={() => setShortcutCategory("system")}
+                  className="rounded-lg px-2 py-1 text-[11px] font-semibold"
+                  style={{
+                    backgroundColor: shortcutCategory === "system" ? "var(--surface)" : "transparent",
+                    color: shortcutCategory === "system" ? "var(--accent-text)" : "var(--text-secondary)",
+                    boxShadow: shortcutCategory === "system" ? "var(--shadow-pill)" : "none",
+                  }}
+                >
+                  Sistema
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={shortcutCategory === "windows"}
+                  onClick={() => setShortcutCategory("windows")}
+                  className="rounded-lg px-2 py-1 text-[11px] font-semibold"
+                  style={{
+                    backgroundColor: shortcutCategory === "windows" ? "var(--surface)" : "transparent",
+                    color: shortcutCategory === "windows" ? "var(--accent-text)" : "var(--text-secondary)",
+                    boxShadow: shortcutCategory === "windows" ? "var(--shadow-pill)" : "none",
+                  }}
+                >
+                  Janelas
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={shortcutCategory === "editing"}
+                  onClick={() => setShortcutCategory("editing")}
+                  className="rounded-lg px-2 py-1 text-[11px] font-semibold"
+                  style={{
+                    backgroundColor: shortcutCategory === "editing" ? "var(--surface)" : "transparent",
+                    color: shortcutCategory === "editing" ? "var(--accent-text)" : "var(--text-secondary)",
+                    boxShadow: shortcutCategory === "editing" ? "var(--shadow-pill)" : "none",
+                  }}
+                >
+                  Edição
+                </button>
+              </div>
+            </div>
+
+            {shortcutCategory === "system" ? (
+              <div className="grid grid-cols-3 gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => sendSystemAction("open_devices")}
+                  className="touch-key kbd-key rounded-xl px-1.5 text-[11px] font-semibold whitespace-nowrap truncate"
+                >
+                  Dispositivos
+                </button>
+                <button
+                  type="button"
+                  onClick={() => sendSpecialKey("p", ["win"])}
+                  className="touch-key kbd-key rounded-xl px-1.5 text-[11px] font-semibold whitespace-nowrap truncate"
+                >
+                  Projetar (TV)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => sendSystemAction("open_sound")}
+                  className="touch-key kbd-key rounded-xl px-1.5 text-[11px] font-semibold whitespace-nowrap truncate"
+                >
+                  Saída de Som
+                </button>
+                <button
+                  type="button"
+                  onClick={() => sendSystemAction("open_display")}
+                  className="touch-key kbd-key rounded-xl px-1.5 text-[11px] font-semibold whitespace-nowrap truncate"
+                >
+                  Telas
+                </button>
+                <button
+                  type="button"
+                  onClick={() => sendSpecialKey("a", ["win"])}
+                  className="touch-key kbd-key rounded-xl px-1.5 text-[11px] font-semibold whitespace-nowrap truncate"
+                >
+                  Painel Rápido
+                </button>
+                <button
+                  type="button"
+                  onClick={() => sendSpecialKey("k", ["win"])}
+                  className="touch-key kbd-key rounded-xl px-1.5 text-[11px] font-semibold whitespace-nowrap truncate"
+                >
+                  Transmitir
+                </button>
+                <button
+                  type="button"
+                  onClick={() => sendSpecialKey("e", ["win"])}
+                  className="touch-key kbd-key rounded-xl px-1.5 text-[11px] font-semibold whitespace-nowrap truncate"
+                >
+                  Arquivos
+                </button>
+                <button
+                  type="button"
+                  onClick={() => sendSpecialKey("escape", ["ctrl", "shift"])}
+                  className="touch-key kbd-key rounded-xl px-1.5 text-[11px] font-semibold whitespace-nowrap truncate"
+                >
+                  Gerenciador
+                </button>
+                <button
+                  type="button"
+                  onClick={handleLockScreenTap}
+                  className="touch-key rounded-xl px-1.5 text-[11px] font-semibold whitespace-nowrap truncate"
+                  style={{
+                    backgroundColor: lockConfirmPending ? "var(--danger)" : "var(--danger-soft)",
+                    border: "1px solid var(--hairline)",
+                    color: lockConfirmPending ? "var(--accent-contrast)" : "var(--danger)",
+                  }}
+                >
+                  {lockConfirmPending ? "Confirmar Bloqueio?" : "Bloquear PC"}
+                </button>
+              </div>
+            ) : shortcutCategory === "windows" ? (
+              <div className="grid grid-cols-3 gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => sendSpecialKey("d", ["win"])}
+                  className="touch-key kbd-key rounded-xl px-1.5 text-[11px] font-semibold whitespace-nowrap truncate"
+                >
+                  Área Trab.
+                </button>
+                <button
+                  type="button"
+                  onClick={() => sendSpecialKey("tab", ["win"])}
+                  className="touch-key kbd-key rounded-xl px-1.5 text-[11px] font-semibold whitespace-nowrap truncate"
+                >
+                  Janelas
+                </button>
+                <button
+                  type="button"
+                  onClick={() => sendSpecialKey("down", ["win"])}
+                  className="touch-key kbd-key rounded-xl px-1.5 text-[11px] font-semibold whitespace-nowrap truncate"
+                >
+                  Minimizar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => sendSpecialKey("up", ["win"])}
+                  className="touch-key kbd-key rounded-xl px-1.5 text-[11px] font-semibold whitespace-nowrap truncate"
+                >
+                  Maximizar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => sendSpecialKey("f5")}
+                  className="touch-key kbd-key rounded-xl px-1.5 text-[11px] font-semibold whitespace-nowrap truncate"
+                >
+                  Atualizar (F5)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => sendSpecialKey("f4", ["alt"])}
+                  className="touch-key kbd-key rounded-xl px-1.5 text-[11px] font-semibold whitespace-nowrap truncate"
+                  style={{ color: "var(--danger)" }}
+                >
+                  Fechar App
+                </button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-3 gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => sendSpecialKey("x", ["ctrl"])}
+                  className="touch-key kbd-key rounded-xl px-1.5 text-[11px] font-semibold whitespace-nowrap truncate"
+                >
+                  Recortar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => sendSpecialKey("z", ["ctrl"])}
+                  className="touch-key kbd-key rounded-xl px-1.5 text-[11px] font-semibold whitespace-nowrap truncate"
+                >
+                  Desfazer
+                </button>
+                <button
+                  type="button"
+                  onClick={() => sendSpecialKey("y", ["ctrl"])}
+                  className="touch-key kbd-key rounded-xl px-1.5 text-[11px] font-semibold whitespace-nowrap truncate"
+                >
+                  Refazer
+                </button>
+                <button
+                  type="button"
+                  onClick={() => sendSpecialKey("a", ["ctrl"])}
+                  className="touch-key kbd-key rounded-xl px-1.5 text-[11px] font-semibold whitespace-nowrap truncate"
+                >
+                  Selec. Tudo
+                </button>
+                <button
+                  type="button"
+                  onClick={() => sendSpecialKey("t", ["ctrl"])}
+                  className="touch-key kbd-key rounded-xl px-1.5 text-[11px] font-semibold whitespace-nowrap truncate"
+                >
+                  Nova Aba
+                </button>
+                <button
+                  type="button"
+                  onClick={() => sendSpecialKey("w", ["ctrl"])}
+                  className="touch-key kbd-key rounded-xl px-1.5 text-[11px] font-semibold whitespace-nowrap truncate"
+                >
+                  Fechar Aba
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </section>

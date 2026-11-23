@@ -110,6 +110,12 @@ export type ActiveTab = "now_playing" | "volume" | "search" | "remote" | "more";
 
 export type MouseButton = "left" | "right" | "middle";
 export type ModifierKey = "ctrl" | "alt" | "shift" | "win";
+export type SystemAction =
+  | "lock_screen"
+  | "open_devices"
+  | "open_display"
+  | "open_sound"
+  | "open_network";
 export type InputAction =
   | "mouse_move"
   | "mouse_move_abs"
@@ -118,7 +124,8 @@ export type InputAction =
   | "mouse_up"
   | "mouse_scroll"
   | "key_text"
-  | "key_press";
+  | "key_press"
+  | "system_action";
 
 export interface InputMessagePayload {
   action: InputAction;
@@ -132,6 +139,7 @@ export interface InputMessagePayload {
   text?: string;
   key?: string;
   modifiers?: ModifierKey[];
+  systemAction?: SystemAction;
 }
 
 export interface ScreenMonitorInfo {

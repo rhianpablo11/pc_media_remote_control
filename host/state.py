@@ -612,6 +612,11 @@ class HostStateCoordinator:
         if action == "key_press":
             ok = await self._input_provider.press_key(msg.key or "", list(msg.modifiers))
             return (ok, None if ok else "key_press_failed")
+        if action == "system_action":
+            if msg.systemAction is None:
+                return False, "invalid_system_action"
+            ok = await self._input_provider.execute_system_action(msg.systemAction)
+            return (ok, None if ok else "system_action_failed")
         return False, "unknown_input_action"
 
     async def _dispatch_open(self, msg: OpenMessage) -> bool:

@@ -390,12 +390,12 @@ input[type="range"].media-slider::-moz-range-thumb {
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: none;
   }
 }
 
 .view-enter {
-  animation: view-enter 160ms var(--ease) both;
+  animation: view-enter 160ms var(--ease) backwards;
 }
 
 @keyframes eq-bounce {

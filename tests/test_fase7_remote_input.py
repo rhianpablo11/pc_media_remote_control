@@ -84,6 +84,10 @@ class FakeInputProvider:
         self.calls.append(("press_key", key, list(modifiers or [])))
         return self.should_succeed
 
+    async def execute_system_action(self, action: str) -> bool:
+        self.calls.append(("system_action", action))
+        return self.should_succeed
+
 
 class MinimalAudioProvider:
     async def get_master_volume(self) -> MasterVolumeInfo:

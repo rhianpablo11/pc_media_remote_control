@@ -138,12 +138,14 @@ export function mapClientPointToNormalized(
   rect: { left: number; top: number; width: number; height: number },
   naturalWidth: number,
   naturalHeight: number,
+  rotationDeg: 0 | 90 = 0,
 ): { x: number; y: number } | null {
   if (rect.width <= 0 || rect.height <= 0 || naturalWidth <= 0 || naturalHeight <= 0) {
     return null;
   }
   const containerAspect = rect.width / rect.height;
-  const imageAspect = naturalWidth / naturalHeight;
+  const imageAspect =
+    rotationDeg === 90 ? naturalHeight / naturalWidth : naturalWidth / naturalHeight;
 
   let renderW = rect.width;
   let renderH = rect.height;
@@ -160,8 +162,16 @@ export function mapClientPointToNormalized(
     offsetX = (rect.width - renderW) / 2;
   }
 
-  const rawX = (clientX - rect.left - offsetX) / renderW;
-  const rawY = (clientY - rect.top - offsetY) / renderH;
+  let rawX: number;
+  let rawY: number;
+  if (rotationDeg === 90) {
+    rawX = (clientY - rect.top - offsetY) / renderH;
+    rawY = 1 - (clientX - rect.left - offsetX) / renderW;
+  } else {
+    rawX = (clientX - rect.left - offsetX) / renderW;
+    rawY = (clientY - rect.top - offsetY) / renderH;
+  }
+
   const x = Math.max(0, Math.min(1, rawX));
   const y = Math.max(0, Math.min(1, rawY));
   return {

@@ -7,6 +7,7 @@ import {
   type PointerEvent,
   type TouchEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import type {
   InputMessagePayload,
   ScreenMetaMessage,
@@ -22,11 +23,16 @@ import {
 import {
   BackspaceIcon,
   CloseIcon,
+  CursorIcon,
   EnterKeyIcon,
   ExpandIcon,
   EyeIcon,
   HandTapIcon,
   MonitorIcon,
+  RotateIcon,
+  ShortcutsIcon,
+  ZoomInIcon,
+  ZoomOutIcon,
 } from "./Icons";
 
 interface ScreenMirrorCardProps {
@@ -37,6 +43,8 @@ interface ScreenMirrorCardProps {
 }
 
 type StreamStatus = "idle" | "connecting" | "streaming" | "paused" | "error";
+type MirrorInteractionMode = "touch" | "cursor" | "view";
+type FullscreenPanel = "none" | "keyboard" | "shortcuts";
 
 const QUALITY_PRESETS: Record<
   ScreenQualityPreset,
@@ -48,6 +56,15 @@ const QUALITY_PRESETS: Record<
 };
 
 const PRESET_ORDER: ScreenQualityPreset[] = ["eco", "normal", "fluid"];
+const MIN_ZOOM = 1;
+const MAX_ZOOM = 3.5;
+const ZOOM_STEP = 0.5;
+const CURSOR_SENSITIVITY = 1.6;
+
+function clampZoom(val: number): number {
+  const clamped = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, val));
+  return Math.round(clamped * 100) / 100;
+}
 
 function resolvePresetValues(preset: ScreenQualityPreset) {
   return QUALITY_PRESETS[preset];
@@ -66,10 +83,16 @@ export function ScreenMirrorCard({
   const [monitors, setMonitors] = useState<ScreenMonitorInfo[]>([]);
   const [activeMonitor, setActiveMonitor] = useState<number>(1);
   const [frameUrl, setFrameUrl] = useState<string | null>(null);
-  const [interactionMode, setInteractionMode] = useState<"touch" | "view">("touch");
+  const [interactionMode, setInteractionMode] = useState<MirrorInteractionMode>("touch");
   const [expanded, setExpanded] = useState(false);
+  const [rotated90, setRotated90] = useState(false);
+  const [hudHidden, setHudHidden] = useState(false);
+  const [fsPanel, setFsPanel] = useState<FullscreenPanel>("none");
+  const [zoom, setZoom] = useState<number>(1);
+  const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [dragLocked, setDragLocked] = useState(false);
   const [fsText, setFsText] = useState("");
+  const [fsLockConfirm, setFsLockConfirm] = useState(false);
   const [tapIndicator, setTapIndicator] = useState<{
     xPct: number;
     yPct: number;
@@ -78,6 +101,9 @@ export function ScreenMirrorCard({
 
   const wsRef = useRef<WebSocket | null>(null);
   const objectUrlRef = useRef<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const inlineStageRef = useRef<HTMLDivElement | null>(null);
+  const modalStageRef = useRef<HTMLDivElement | null>(null);
   const inlineImgRef = useRef<HTMLImageElement | null>(null);
   const modalImgRef = useRef<HTMLImageElement | null>(null);
   const naturalSizeRef = useRef<{ width: number; height: number }>({ width: 16, height: 9 });
@@ -86,19 +112,35 @@ export function ScreenMirrorCard({
   activeMonitorRef.current = activeMonitor;
   const presetRef = useRef(preset);
   presetRef.current = preset;
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
+  const panRef = useRef(pan);
+  panRef.current = pan;
+  const rotated90Ref = useRef(rotated90);
+  rotated90Ref.current = rotated90;
+  const expandedRef = useRef(expanded);
+  expandedRef.current = expanded;
 
-  const pendingMoveRef = useRef<{ x: number; y: number } | null>(null);
+  const pendingAbsMoveRef = useRef<{ x: number; y: number } | null>(null);
+  const pendingRelMoveRef = useRef({ dx: 0, dy: 0 });
   const pendingScrollDyRef = useRef(0);
   const rafIdRef = useRef<number | null>(null);
   const longPressTimerRef = useRef<number | null>(null);
   const tapTimerRef = useRef<number | null>(null);
+  const lockTimerRef = useRef<number | null>(null);
   const touchActiveRef = useRef(false);
   const gestureRef = useRef({
     active: false,
     maxFingers: 0,
     startX: 0,
     startY: 0,
+    lastX: 0,
+    lastY: 0,
+    twoStartDist: 0,
+    twoStartZoom: 1,
+    twoCenterX: 0,
     twoCenterY: 0,
+    pinchTriggered: false,
     travelPx: 0,
     startedAt: 0,
     lastTapAt: 0,
@@ -126,11 +168,56 @@ export function ScreenMirrorCard({
       window.clearTimeout(tapTimerRef.current);
       tapTimerRef.current = null;
     }
+    if (lockTimerRef.current !== null) {
+      window.clearTimeout(lockTimerRef.current);
+      lockTimerRef.current = null;
+    }
     if (rafIdRef.current !== null) {
       window.cancelAnimationFrame(rafIdRef.current);
       rafIdRef.current = null;
     }
   }, []);
+
+  const getActiveStage = useCallback(() => {
+    return expandedRef.current ? modalStageRef.current : inlineStageRef.current;
+  }, []);
+
+  const clampPanValues = useCallback(
+    (nextPan: { x: number; y: number }, targetZoom: number): { x: number; y: number } => {
+      if (targetZoom <= 1.01) {
+        return { x: 0, y: 0 };
+      }
+      const stageEl = getActiveStage();
+      const stageW = stageEl?.clientWidth || 320;
+      const stageH = stageEl?.clientHeight || 200;
+      const maxX = Math.max(40, ((targetZoom - 1) / 2) * stageW);
+      const maxY = Math.max(40, ((targetZoom - 1) / 2) * stageH);
+      return {
+        x: Math.max(-maxX, Math.min(maxX, Math.round(nextPan.x))),
+        y: Math.max(-maxY, Math.min(maxY, Math.round(nextPan.y))),
+      };
+    },
+    [getActiveStage],
+  );
+
+  const resetZoomAndPan = useCallback(() => {
+    zoomRef.current = 1;
+    panRef.current = { x: 0, y: 0 };
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }, []);
+
+  const setZoomClamped = useCallback(
+    (nextZoomVal: number, nextPanCandidate?: { x: number; y: number }) => {
+      const clampedZ = clampZoom(nextZoomVal);
+      const clampedP = clampPanValues(nextPanCandidate ?? panRef.current, clampedZ);
+      zoomRef.current = clampedZ;
+      panRef.current = clampedP;
+      setZoom(clampedZ);
+      setPan(clampedP);
+    },
+    [clampPanValues],
+  );
 
   const sendStreamConfig = useCallback(
     (overrides?: {
@@ -156,9 +243,18 @@ export function ScreenMirrorCard({
     [],
   );
 
+  const exitFullscreenModal = useCallback(() => {
+    setExpanded(false);
+    setRotated90(false);
+    setHudHidden(false);
+    setFsPanel("none");
+    setFsLockConfirm(false);
+    resetZoomAndPan();
+  }, [resetZoomAndPan]);
+
   const stopMirror = useCallback(() => {
     setActive(false);
-    setExpanded(false);
+    exitFullscreenModal();
     setStatus("idle");
     setErrorMsg(null);
     clearTimersAndRaf();
@@ -172,7 +268,52 @@ export function ScreenMirrorCard({
       wsRef.current = null;
     }
     revokeFrameUrl();
-  }, [clearTimersAndRaf, onSendInput, revokeFrameUrl]);
+  }, [clearTimersAndRaf, exitFullscreenModal, onSendInput, revokeFrameUrl]);
+
+  // Body scroll lock + best-effort native Fullscreen API when expanded
+  useEffect(() => {
+    if (!expanded || typeof document === "undefined") {
+      return undefined;
+    }
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    const dialogEl = dialogRef.current as (HTMLDivElement & {
+      requestFullscreen?: () => Promise<void> | void;
+    }) | null;
+    if (dialogEl && typeof dialogEl.requestFullscreen === "function") {
+      try {
+        const res = dialogEl.requestFullscreen();
+        if (res && typeof (res as Promise<void>).catch === "function") {
+          (res as Promise<void>).catch(() => {});
+        }
+      } catch {
+        // Ignore fullscreen rejection in unsupported environments
+      }
+    }
+
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      try {
+        if (document.fullscreenElement && typeof document.exitFullscreen === "function") {
+          const res = document.exitFullscreen();
+          if (res && typeof (res as Promise<void>).catch === "function") {
+            (res as Promise<void>).catch(() => {});
+          }
+        }
+      } catch {
+        // Ignore exitFullscreen error
+      }
+      try {
+        const orient = (
+          screen as Screen & { orientation?: { unlock?: () => void } }
+        )?.orientation;
+        orient?.unlock?.();
+      } catch {
+        // Ignore orientation unlock error
+      }
+    };
+  }, [expanded]);
 
   // Manage /ws/screen lifecycle only while active === true
   useEffect(() => {
@@ -224,7 +365,9 @@ export function ScreenMirrorCard({
 
       if (typeof event.data === "string") {
         try {
-          const parsed = JSON.parse(event.data) as ScreenMetaMessage | { type: string; message?: string };
+          const parsed = JSON.parse(event.data) as
+            | ScreenMetaMessage
+            | { type: string; message?: string };
           if (parsed.type === "screen_meta") {
             const meta = parsed as ScreenMetaMessage;
             if (Array.isArray(meta.monitors) && meta.monitors.length > 0) {
@@ -323,24 +466,40 @@ export function ScreenMirrorCard({
 
   useEffect(() => {
     return () => {
+      clearTimersAndRaf();
       if (dragLockedRef.current) {
         dragLockedRef.current = false;
         onSendInput({ action: "mouse_up", button: "left" });
       }
     };
-  }, [onSendInput]);
+  }, [clearTimersAndRaf, onSendInput]);
 
   const flushMirrorMotion = useCallback(() => {
     rafIdRef.current = null;
-    const moveTarget = pendingMoveRef.current;
-    if (moveTarget) {
-      pendingMoveRef.current = null;
+    const absTarget = pendingAbsMoveRef.current;
+    if (absTarget) {
+      pendingAbsMoveRef.current = null;
       onSendInput(
         {
           action: "mouse_move_abs",
-          x: moveTarget.x,
-          y: moveTarget.y,
+          x: absTarget.x,
+          y: absTarget.y,
           monitor: activeMonitorRef.current,
+        },
+        { expectAck: false },
+      );
+    }
+
+    const relDx = Math.trunc(pendingRelMoveRef.current.dx);
+    const relDy = Math.trunc(pendingRelMoveRef.current.dy);
+    if (relDx !== 0 || relDy !== 0) {
+      pendingRelMoveRef.current.dx -= relDx;
+      pendingRelMoveRef.current.dy -= relDy;
+      onSendInput(
+        {
+          action: "mouse_move",
+          dx: Math.max(-500, Math.min(500, relDx)),
+          dy: Math.max(-500, Math.min(500, relDy)),
         },
         { expectAck: false },
       );
@@ -365,32 +524,52 @@ export function ScreenMirrorCard({
     rafIdRef.current = window.requestAnimationFrame(flushMirrorMotion);
   }, [flushMirrorMotion]);
 
-  const mapPointer = (clientX: number, clientY: number) => {
-    const imgEl = expanded ? modalImgRef.current : inlineImgRef.current;
+  const mapPointer = useCallback((clientX: number, clientY: number) => {
+    const imgEl = expandedRef.current ? modalImgRef.current : inlineImgRef.current;
     if (!imgEl) return null;
     const rect = imgEl.getBoundingClientRect();
     const natW = imgEl.naturalWidth || naturalSizeRef.current.width || 16;
     const natH = imgEl.naturalHeight || naturalSizeRef.current.height || 9;
+    const rot: 0 | 90 = expandedRef.current && rotated90Ref.current ? 90 : 0;
     return {
-      norm: mapClientPointToNormalized(clientX, clientY, rect, natW, natH),
+      norm: mapClientPointToNormalized(clientX, clientY, rect, natW, natH, rot),
       rect,
     };
-  };
+  }, []);
 
-  const showTapDot = (clientX: number, clientY: number, rect: DOMRect) => {
-    if (rect.width <= 0 || rect.height <= 0) return;
-    const xPct = Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100));
-    const yPct = Math.max(0, Math.min(100, ((clientY - rect.top) / rect.height) * 100));
-    const key = Date.now() + Math.random();
-    setTapIndicator({ xPct, yPct, key });
-    if (tapTimerRef.current !== null) {
-      window.clearTimeout(tapTimerRef.current);
-    }
-    tapTimerRef.current = window.setTimeout(() => {
-      setTapIndicator(null);
-      tapTimerRef.current = null;
-    }, 380);
-  };
+  const showTapDot = useCallback(
+    (clientX: number, clientY: number) => {
+      const stageEl = getActiveStage();
+      if (!stageEl) return;
+      const rect = stageEl.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+
+      let xPct: number;
+      let yPct: number;
+      if (expandedRef.current && rotated90Ref.current) {
+        xPct = ((clientY - rect.top) / rect.height) * 100;
+        yPct = (1 - (clientX - rect.left) / rect.width) * 100;
+      } else {
+        xPct = ((clientX - rect.left) / rect.width) * 100;
+        yPct = ((clientY - rect.top) / rect.height) * 100;
+      }
+
+      const key = Date.now() + Math.random();
+      setTapIndicator({
+        xPct: Math.max(0, Math.min(100, xPct)),
+        yPct: Math.max(0, Math.min(100, yPct)),
+        key,
+      });
+      if (tapTimerRef.current !== null) {
+        window.clearTimeout(tapTimerRef.current);
+      }
+      tapTimerRef.current = window.setTimeout(() => {
+        setTapIndicator(null);
+        tapTimerRef.current = null;
+      }, 380);
+    },
+    [getActiveStage],
+  );
 
   const cancelLongPress = () => {
     if (longPressTimerRef.current !== null) {
@@ -399,8 +578,30 @@ export function ScreenMirrorCard({
     }
   };
 
-  const handleStageStart = (clientX: number, clientY: number, touchesCount: number, twoCenterY?: number) => {
-    if (interactionMode !== "touch" || !remoteInputEnabled) return;
+  const queueCursorRelativeMove = (rawDx: number, rawDy: number) => {
+    const rotated = expandedRef.current && rotated90Ref.current;
+    const localDx = rotated ? rawDy : rawDx;
+    const localDy = rotated ? -rawDx : rawDy;
+    const dist = Math.hypot(localDx, localDy);
+    const accel = dist > 14 ? 1.45 : 1.0;
+    pendingRelMoveRef.current.dx += localDx * CURSOR_SENSITIVITY * accel;
+    pendingRelMoveRef.current.dy += localDy * CURSOR_SENSITIVITY * accel;
+    scheduleMirrorFlush();
+  };
+
+  const handleStageStart = (
+    clientX: number,
+    clientY: number,
+    touchesCount: number,
+    twoCenterX?: number,
+    twoCenterY?: number,
+    twoDist?: number,
+  ) => {
+    const canPanView = interactionMode === "view" && zoomRef.current > 1.01;
+    const canPinchOrPan = touchesCount >= 2;
+    const canInteract = remoteInputEnabled && (interactionMode === "touch" || interactionMode === "cursor");
+    if (!canInteract && !canPanView && !canPinchOrPan) return;
+
     const g = gestureRef.current;
     g.maxFingers = Math.max(g.active ? g.maxFingers : 0, touchesCount);
 
@@ -408,18 +609,29 @@ export function ScreenMirrorCard({
       g.active = true;
       g.startX = clientX;
       g.startY = clientY;
+      g.lastX = clientX;
+      g.lastY = clientY;
       g.travelPx = 0;
       g.startedAt = Date.now();
       g.longPressFired = false;
+      g.pinchTriggered = false;
     }
 
-    if (touchesCount >= 2 && twoCenterY !== undefined) {
+    if (
+      touchesCount >= 2 &&
+      twoCenterX !== undefined &&
+      twoCenterY !== undefined &&
+      twoDist !== undefined
+    ) {
       cancelLongPress();
+      g.twoStartDist = twoDist;
+      g.twoStartZoom = zoomRef.current;
+      g.twoCenterX = twoCenterX;
       g.twoCenterY = twoCenterY;
       return;
     }
 
-    if (touchesCount === 1) {
+    if (touchesCount === 1 && interactionMode === "touch" && remoteInputEnabled) {
       cancelLongPress();
       longPressTimerRef.current = window.setTimeout(() => {
         longPressTimerRef.current = null;
@@ -429,7 +641,7 @@ export function ScreenMirrorCard({
           if (mapped?.norm) {
             gestureRef.current.longPressFired = true;
             triggerHaptic(14);
-            showTapDot(clientX, clientY, mapped.rect);
+            showTapDot(clientX, clientY);
             onSendInput(
               {
                 action: "mouse_move_abs",
@@ -446,6 +658,43 @@ export function ScreenMirrorCard({
     }
   };
 
+  const handleStageMove = (clientX: number, clientY: number) => {
+    const g = gestureRef.current;
+    if (!g.active) return;
+
+    const dx = clientX - g.lastX;
+    const dy = clientY - g.lastY;
+    g.lastX = clientX;
+    g.lastY = clientY;
+    g.travelPx = Math.max(g.travelPx, Math.hypot(clientX - g.startX, clientY - g.startY));
+
+    if (interactionMode === "view" && zoomRef.current > 1.01) {
+      const localDx = expandedRef.current && rotated90Ref.current ? dy : dx;
+      const localDy = expandedRef.current && rotated90Ref.current ? -dx : dy;
+      setZoomClamped(zoomRef.current, {
+        x: panRef.current.x + localDx,
+        y: panRef.current.y + localDy,
+      });
+      return;
+    }
+
+    if (!remoteInputEnabled) return;
+
+    if (interactionMode === "cursor") {
+      queueCursorRelativeMove(dx, dy);
+      return;
+    }
+
+    if (interactionMode === "touch" && g.travelPx > 8) {
+      cancelLongPress();
+      const mapped = mapPointer(clientX, clientY);
+      if (mapped?.norm) {
+        pendingAbsMoveRef.current = mapped.norm;
+        scheduleMirrorFlush();
+      }
+    }
+  };
+
   const handleStageEnd = (clientX: number, clientY: number) => {
     const g = gestureRef.current;
     if (!g.active) return;
@@ -456,74 +705,104 @@ export function ScreenMirrorCard({
     flushMirrorMotion();
 
     const elapsed = Date.now() - g.startedAt;
-    if (
-      !g.longPressFired &&
-      g.maxFingers === 1 &&
-      g.travelPx < 10 &&
-      elapsed < 280 &&
-      interactionMode === "touch" &&
-      remoteInputEnabled
-    ) {
-      const mapped = mapPointer(clientX, clientY);
-      if (mapped?.norm) {
-        const now = Date.now();
-        const isDouble = g.lastTapAt > 0 && now - g.lastTapAt < 280;
-        g.lastTapAt = isDouble ? 0 : now;
-        triggerHaptic(8);
-        showTapDot(clientX, clientY, mapped.rect);
-        onSendInput(
-          {
-            action: "mouse_move_abs",
-            x: mapped.norm.x,
-            y: mapped.norm.y,
-            monitor: activeMonitorRef.current,
-          },
-          { expectAck: false },
-        );
-        onSendInput({ action: "mouse_click", button: "left", double: isDouble });
+    if (!g.pinchTriggered && remoteInputEnabled) {
+      if (interactionMode === "cursor" && g.maxFingers === 2 && g.travelPx < 14 && elapsed < 280) {
+        triggerHaptic(12);
+        onSendInput({ action: "mouse_click", button: "right" });
+      } else if (g.maxFingers === 1 && !g.longPressFired && g.travelPx < 10 && elapsed < 280) {
+        if (interactionMode === "cursor") {
+          const now = Date.now();
+          const isDouble = g.lastTapAt > 0 && now - g.lastTapAt < 280;
+          g.lastTapAt = isDouble ? 0 : now;
+          triggerHaptic(8);
+          onSendInput({ action: "mouse_click", button: "left", double: isDouble });
+        } else if (interactionMode === "touch") {
+          const mapped = mapPointer(clientX, clientY);
+          if (mapped?.norm) {
+            const now = Date.now();
+            const isDouble = g.lastTapAt > 0 && now - g.lastTapAt < 280;
+            g.lastTapAt = isDouble ? 0 : now;
+            triggerHaptic(8);
+            showTapDot(clientX, clientY);
+            onSendInput(
+              {
+                action: "mouse_move_abs",
+                x: mapped.norm.x,
+                y: mapped.norm.y,
+                monitor: activeMonitorRef.current,
+              },
+              { expectAck: false },
+            );
+            onSendInput({ action: "mouse_click", button: "left", double: isDouble });
+          }
+        }
       }
     }
 
     g.active = false;
     g.maxFingers = 0;
     g.longPressFired = false;
+    g.pinchTriggered = false;
   };
 
   const onTouchStart = (e: TouchEvent<HTMLDivElement>) => {
-    if (interactionMode !== "touch" || !remoteInputEnabled || e.touches.length === 0) return;
+    if (e.touches.length === 0) return;
     touchActiveRef.current = true;
     const t0 = e.touches[0];
-    const twoCy =
-      e.touches.length >= 2 ? (e.touches[0].clientY + e.touches[1].clientY) / 2 : undefined;
-    handleStageStart(t0.clientX, t0.clientY, e.touches.length, twoCy);
+    if (e.touches.length >= 2) {
+      const t1 = e.touches[1];
+      const cx = (t0.clientX + t1.clientX) / 2;
+      const cy = (t0.clientY + t1.clientY) / 2;
+      const dist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+      handleStageStart(t0.clientX, t0.clientY, e.touches.length, cx, cy, dist);
+      return;
+    }
+    handleStageStart(t0.clientX, t0.clientY, 1);
   };
 
   const onTouchMove = (e: TouchEvent<HTMLDivElement>) => {
     const g = gestureRef.current;
-    if (!g.active || interactionMode !== "touch" || !remoteInputEnabled) return;
+    if (!g.active) return;
 
     if (e.touches.length >= 2) {
       cancelLongPress();
-      const cy = (e.touches[0].clientY + e.touches[1].clientY) / 2;
-      const dy = cy - g.twoCenterY;
+      const t0 = e.touches[0];
+      const t1 = e.touches[1];
+      const cx = (t0.clientX + t1.clientX) / 2;
+      const cy = (t0.clientY + t1.clientY) / 2;
+      const dist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+      const centerDx = cx - g.twoCenterX;
+      const centerDy = cy - g.twoCenterY;
+      g.travelPx += Math.hypot(centerDx, centerDy);
+
+      if (g.twoStartDist > 12 && Math.abs(dist - g.twoStartDist) > 10) {
+        g.pinchTriggered = true;
+        const targetZoom = g.twoStartZoom * (dist / g.twoStartDist);
+        const localDx = expandedRef.current && rotated90Ref.current ? centerDy : centerDx;
+        const localDy = expandedRef.current && rotated90Ref.current ? -centerDx : centerDy;
+        setZoomClamped(targetZoom, {
+          x: panRef.current.x + localDx,
+          y: panRef.current.y + localDy,
+        });
+      } else if (zoomRef.current > 1.05) {
+        const localDx = expandedRef.current && rotated90Ref.current ? centerDy : centerDx;
+        const localDy = expandedRef.current && rotated90Ref.current ? -centerDx : centerDy;
+        setZoomClamped(zoomRef.current, {
+          x: panRef.current.x + localDx,
+          y: panRef.current.y + localDy,
+        });
+      } else if (remoteInputEnabled) {
+        pendingScrollDyRef.current += centerDy * 5;
+        scheduleMirrorFlush();
+      }
+
+      g.twoCenterX = cx;
       g.twoCenterY = cy;
-      g.travelPx += Math.abs(dy);
-      pendingScrollDyRef.current += dy * 5;
-      scheduleMirrorFlush();
       return;
     }
 
     if (e.touches.length === 1 && g.maxFingers === 1) {
-      const t = e.touches[0];
-      g.travelPx = Math.max(g.travelPx, Math.hypot(t.clientX - g.startX, t.clientY - g.startY));
-      if (g.travelPx > 8) {
-        cancelLongPress();
-        const mapped = mapPointer(t.clientX, t.clientY);
-        if (mapped?.norm) {
-          pendingMoveRef.current = mapped.norm;
-          scheduleMirrorFlush();
-        }
-      }
+      handleStageMove(e.touches[0].clientX, e.touches[0].clientY);
     }
   };
 
@@ -540,37 +819,13 @@ export function ScreenMirrorCard({
   };
 
   const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
-    if (
-      e.pointerType === "touch" ||
-      touchActiveRef.current ||
-      interactionMode !== "touch" ||
-      !remoteInputEnabled
-    ) {
-      return;
-    }
+    if (e.pointerType === "touch" || touchActiveRef.current) return;
     handleStageStart(e.clientX, e.clientY, 1);
   };
 
   const onPointerMove = (e: PointerEvent<HTMLDivElement>) => {
-    const g = gestureRef.current;
-    if (
-      !g.active ||
-      e.pointerType === "touch" ||
-      touchActiveRef.current ||
-      interactionMode !== "touch" ||
-      !remoteInputEnabled
-    ) {
-      return;
-    }
-    g.travelPx = Math.max(g.travelPx, Math.hypot(e.clientX - g.startX, e.clientY - g.startY));
-    if (g.travelPx > 8) {
-      cancelLongPress();
-      const mapped = mapPointer(e.clientX, e.clientY);
-      if (mapped?.norm) {
-        pendingMoveRef.current = mapped.norm;
-        scheduleMirrorFlush();
-      }
-    }
+    if (e.pointerType === "touch" || touchActiveRef.current) return;
+    handleStageMove(e.clientX, e.clientY);
   };
 
   const onPointerUp = (e: PointerEvent<HTMLDivElement>) => {
@@ -589,7 +844,30 @@ export function ScreenMirrorCard({
     triggerHaptic(6);
     setActiveMonitor(monitorId);
     activeMonitorRef.current = monitorId;
+    resetZoomAndPan();
     sendStreamConfig({ monitor: monitorId, paused: false });
+  };
+
+  const toggleRotate90 = () => {
+    triggerHaptic(8);
+    const next = !rotated90;
+    setRotated90(next);
+    resetZoomAndPan();
+    try {
+      const orient = (
+        screen as Screen & {
+          orientation?: { lock?: (o: string) => Promise<void>; unlock?: () => void };
+        }
+      )?.orientation;
+      if (next && orient?.lock) {
+        const p = orient.lock("landscape");
+        if (p && typeof p.catch === "function") p.catch(() => {});
+      } else if (!next && orient?.unlock) {
+        orient.unlock();
+      }
+    } catch {
+      // Orientation Lock API unavailable or disallowed — CSS rotation fallback handles it
+    }
   };
 
   const toggleDragLock = () => {
@@ -609,17 +887,91 @@ export function ScreenMirrorCard({
     }
   };
 
+  const triggerLockPcInMirror = () => {
+    if (!fsLockConfirm) {
+      triggerHaptic(10);
+      setFsLockConfirm(true);
+      if (lockTimerRef.current !== null) window.clearTimeout(lockTimerRef.current);
+      lockTimerRef.current = window.setTimeout(() => {
+        setFsLockConfirm(false);
+        lockTimerRef.current = null;
+      }, 3500);
+      return;
+    }
+    triggerHaptic(16);
+    if (lockTimerRef.current !== null) {
+      window.clearTimeout(lockTimerRef.current);
+      lockTimerRef.current = null;
+    }
+    setFsLockConfirm(false);
+    onSendInput({ action: "system_action", systemAction: "lock_screen" });
+  };
+
   if (!available) {
     return null;
   }
 
+  const renderZoomControls = (compactDark = false) => (
+    <div
+      className={`inline-flex items-center gap-0.5 rounded-xl border p-0.5 ${
+        compactDark ? "border-white/20 bg-white/10 text-white" : ""
+      }`}
+      style={
+        compactDark
+          ? undefined
+          : {
+              backgroundColor: "var(--surface-elevated)",
+              borderColor: "var(--hairline)",
+            }
+      }
+      role="group"
+      aria-label="Zoom do espelho"
+    >
+      <button
+        type="button"
+        onClick={() => setZoomClamped(zoom - ZOOM_STEP)}
+        disabled={zoom <= MIN_ZOOM}
+        aria-label="Diminuir zoom do espelho"
+        className="rounded-lg px-2 py-1 text-xs font-semibold disabled:opacity-40"
+      >
+        <ZoomOutIcon className="h-3.5 w-3.5" />
+      </button>
+      <button
+        type="button"
+        onClick={resetZoomAndPan}
+        aria-label="Resetar zoom do espelho"
+        className="rounded-lg px-1.5 py-1 text-[11px] font-semibold tabular-nums"
+        style={compactDark ? undefined : { color: "var(--text)" }}
+      >
+        {zoom.toFixed(1)}x
+      </button>
+      <button
+        type="button"
+        onClick={() => setZoomClamped(zoom + ZOOM_STEP)}
+        disabled={zoom >= MAX_ZOOM}
+        aria-label="Aumentar zoom do espelho"
+        className="rounded-lg px-2 py-1 text-xs font-semibold disabled:opacity-40"
+      >
+        <ZoomInIcon className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
+
   const renderViewport = (isModal: boolean) => {
-    const touchInteractive = interactionMode === "touch" && remoteInputEnabled;
+    const canTouchDrag =
+      (interactionMode === "view" && zoom > 1.01) ||
+      (remoteInputEnabled && (interactionMode === "touch" || interactionMode === "cursor"));
+
     return (
       <div
+        ref={isModal ? modalStageRef : inlineStageRef}
         data-testid={isModal ? "screen-mirror-modal-stage" : "screen-mirror-stage"}
-        className={`relative overflow-hidden bg-black ${touchInteractive ? "touch-none select-none cursor-crosshair" : ""} ${
-          isModal ? "h-full w-full flex items-center justify-center" : "aspect-video w-full rounded-[16px]"
+        className={`relative overflow-hidden bg-black ${
+          canTouchDrag ? "touch-none select-none cursor-crosshair" : "touch-none select-none"
+        } ${
+          isModal
+            ? "h-full w-full flex items-center justify-center"
+            : "aspect-video w-full rounded-[16px]"
         }`}
         style={{
           border: isModal ? undefined : "1px solid var(--hairline)",
@@ -645,6 +997,11 @@ export function ScreenMirrorCard({
               if (nw > 0 && nh > 0) {
                 naturalSizeRef.current = { width: nw, height: nh };
               }
+            }}
+            style={{
+              transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})`,
+              transformOrigin: "center center",
+              transition: gestureRef.current.active ? "none" : "transform 120ms ease-out",
             }}
             className="h-full w-full object-contain pointer-events-none select-none"
           />
@@ -694,7 +1051,7 @@ export function ScreenMirrorCard({
               </span>
             </div>
             <p className="mt-1 text-xs" style={{ color: "var(--text-secondary)" }}>
-              Veja a tela do PC em tempo real e toque direto para clicar, sem interromper o touchpad separado.
+              Veja a tela do PC ao vivo com zoom, modo paisagem e controle direto sem sair da aba.
             </p>
           </div>
 
@@ -716,6 +1073,357 @@ export function ScreenMirrorCard({
       </section>
     );
   }
+
+  const fullscreenModal =
+    expanded && typeof document !== "undefined"
+      ? createPortal(
+          <div
+            ref={dialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Espelho da tela em tela cheia"
+            className="fixed inset-0 z-50 h-dvh w-dvw overflow-hidden bg-black text-white"
+          >
+            <div
+              data-testid="screen-mirror-modal-frame"
+              style={
+                rotated90
+                  ? {
+                      position: "fixed",
+                      top: "50%",
+                      left: "50%",
+                      width: "100dvh",
+                      height: "100dvw",
+                      transform: "translate(-50%, -50%) rotate(90deg)",
+                      transformOrigin: "center center",
+                    }
+                  : { position: "relative", width: "100%", height: "100%" }
+              }
+            >
+              {/* Full-bleed live screen */}
+              <div className="absolute inset-0">{renderViewport(true)}</div>
+
+              {hudHidden ? (
+                <button
+                  type="button"
+                  onClick={() => setHudHidden(false)}
+                  aria-label="Mostrar controles do espelho"
+                  className="absolute right-3 top-3 z-20 rounded-full border border-white/25 bg-black/75 px-3 py-1.5 text-xs font-semibold text-white backdrop-blur-md"
+                >
+                  Controles
+                </button>
+              ) : (
+                <>
+                  {/* Floating Top Bar */}
+                  <div className="absolute inset-x-0 top-0 z-20 flex flex-wrap items-center justify-between gap-2 bg-black/75 px-3 py-2 backdrop-blur-md">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <div className="inline-flex rounded-xl border border-white/20 bg-white/10 p-0.5">
+                        {PRESET_ORDER.map((key) => {
+                          const selected = preset === key;
+                          return (
+                            <button
+                              key={key}
+                              type="button"
+                              onClick={() => handlePresetChange(key)}
+                              className={`rounded-lg px-2 py-1 text-[11px] font-semibold ${
+                                selected ? "bg-sky-600 text-white" : "text-white/75"
+                              }`}
+                            >
+                              {QUALITY_PRESETS[key].label}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {renderZoomControls(true)}
+
+                      {monitors.length > 1
+                        ? monitors.map((mon) => (
+                            <button
+                              key={mon.id}
+                              type="button"
+                              onClick={() => handleMonitorChange(mon.id)}
+                              className={`rounded-lg px-2 py-1 text-xs font-semibold ${
+                                activeMonitor === mon.id
+                                  ? "bg-sky-600 text-white"
+                                  : "bg-white/15 text-white/85"
+                              }`}
+                            >
+                              T{mon.id}
+                            </button>
+                          ))
+                        : null}
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={toggleRotate90}
+                        aria-pressed={rotated90}
+                        aria-label="Girar tela deitada"
+                        className={`inline-flex items-center gap-1 rounded-xl px-2.5 py-1.5 text-xs font-semibold ${
+                          rotated90 ? "bg-sky-600 text-white" : "bg-white/15 text-white"
+                        }`}
+                      >
+                        <RotateIcon className="h-3.5 w-3.5" />
+                        <span>Girar</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFsPanel("none");
+                          setHudHidden(true);
+                        }}
+                        aria-label="Ocultar controles"
+                        className="rounded-xl bg-white/15 px-2.5 py-1.5 text-xs font-semibold text-white"
+                      >
+                        Ocultar
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={exitFullscreenModal}
+                        aria-label="Fechar tela cheia"
+                        className="inline-flex items-center gap-1 rounded-xl bg-red-600/85 px-2.5 py-1.5 text-xs font-semibold text-white"
+                      >
+                        <CloseIcon className="h-3.5 w-3.5" />
+                        <span>Fechar</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Floating Popups (Keyboard / Shortcuts) above Bottom Bar */}
+                  {fsPanel !== "none" && remoteInputEnabled ? (
+                    <div className="absolute inset-x-3 bottom-14 z-20 rounded-2xl border border-white/20 bg-black/90 p-2.5 backdrop-blur-md">
+                      {fsPanel === "keyboard" ? (
+                        <div className="flex flex-col gap-2">
+                          <form onSubmit={handleFsTextSubmit} className="flex gap-1.5">
+                            <input
+                              type="text"
+                              value={fsText}
+                              onChange={(e) => setFsText(e.target.value)}
+                              placeholder="Digitar texto no PC…"
+                              aria-label="Texto rápido no espelho"
+                              className="min-h-[38px] min-w-0 flex-1 rounded-xl border border-white/25 bg-white/10 px-3 text-xs text-white placeholder:text-white/50"
+                            />
+                            <button
+                              type="submit"
+                              disabled={!fsText}
+                              className="rounded-xl bg-sky-600 px-3 text-xs font-semibold text-white disabled:opacity-40"
+                            >
+                              Enviar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => onSendInput({ action: "key_press", key: "backspace" })}
+                              aria-label="Apagar no PC"
+                              className="rounded-xl bg-white/15 px-2.5 text-xs font-semibold text-white"
+                            >
+                              <BackspaceIcon className="h-4 w-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => onSendInput({ action: "key_press", key: "enter" })}
+                              aria-label="Enter no PC"
+                              className="rounded-xl bg-sky-600 px-2.5 text-xs font-semibold text-white"
+                            >
+                              <EnterKeyIcon className="h-4 w-4" />
+                            </button>
+                          </form>
+                          <div className="flex flex-wrap gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => onSendInput({ action: "key_press", key: "escape" })}
+                              className="rounded-xl bg-white/15 px-2.5 py-1 text-xs font-semibold text-white"
+                            >
+                              Esc
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => onSendInput({ action: "key_press", key: "tab" })}
+                              className="rounded-xl bg-white/15 px-2.5 py-1 text-xs font-semibold text-white"
+                            >
+                              Tab
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => onSendInput({ action: "key_press", key: "space" })}
+                              className="rounded-xl bg-white/15 px-2.5 py-1 text-xs font-semibold text-white"
+                            >
+                              Espaço
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => onSendInput({ action: "key_press", key: "f" })}
+                              className="rounded-xl bg-white/15 px-2.5 py-1 text-xs font-semibold text-white"
+                            >
+                              Tela (F)
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex flex-wrap gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onSendInput({ action: "key_press", key: "tab", modifiers: ["alt"] })
+                            }
+                            className="rounded-xl bg-white/15 px-2.5 py-1.5 text-xs font-semibold text-white"
+                          >
+                            Alt+Tab
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onSendInput({ action: "key_press", key: "d", modifiers: ["win"] })
+                            }
+                            className="rounded-xl bg-white/15 px-2.5 py-1.5 text-xs font-semibold text-white"
+                          >
+                            Win+D
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onSendInput({ action: "key_press", key: "p", modifiers: ["win"] })
+                            }
+                            className="rounded-xl bg-white/15 px-2.5 py-1.5 text-xs font-semibold text-white"
+                          >
+                            Projetar (TV)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onSendInput({ action: "system_action", systemAction: "open_devices" })
+                            }
+                            className="rounded-xl bg-white/15 px-2.5 py-1.5 text-xs font-semibold text-white"
+                          >
+                            Dispositivos
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onSendInput({ action: "key_press", key: "c", modifiers: ["ctrl"] })
+                            }
+                            className="rounded-xl bg-white/15 px-2.5 py-1.5 text-xs font-semibold text-white"
+                          >
+                            Copiar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onSendInput({ action: "key_press", key: "v", modifiers: ["ctrl"] })
+                            }
+                            className="rounded-xl bg-white/15 px-2.5 py-1.5 text-xs font-semibold text-white"
+                          >
+                            Colar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={triggerLockPcInMirror}
+                            className={`rounded-xl px-2.5 py-1.5 text-xs font-semibold ${
+                              fsLockConfirm ? "bg-red-600 text-white" : "bg-white/15 text-red-300"
+                            }`}
+                          >
+                            {fsLockConfirm ? "Confirmar Bloqueio?" : "Bloquear PC"}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+
+                  {/* Floating Bottom Action Dock */}
+                  <div className="absolute inset-x-0 bottom-0 z-20 flex flex-wrap items-center justify-between gap-1.5 bg-black/75 px-3 py-2 backdrop-blur-md">
+                    <div className="inline-flex rounded-xl border border-white/20 bg-white/10 p-0.5">
+                      <button
+                        type="button"
+                        onClick={() => setInteractionMode("touch")}
+                        className={`rounded-lg px-2 py-1 text-xs font-semibold ${
+                          interactionMode === "touch" ? "bg-sky-600 text-white" : "text-white/75"
+                        }`}
+                      >
+                        Toque
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setInteractionMode("cursor")}
+                        className={`rounded-lg px-2 py-1 text-xs font-semibold ${
+                          interactionMode === "cursor" ? "bg-sky-600 text-white" : "text-white/75"
+                        }`}
+                      >
+                        Cursor
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setInteractionMode("view")}
+                        className={`rounded-lg px-2 py-1 text-xs font-semibold ${
+                          interactionMode === "view" ? "bg-sky-600 text-white" : "text-white/75"
+                        }`}
+                      >
+                        Só ver
+                      </button>
+                    </div>
+
+                    {remoteInputEnabled ? (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => onSendInput({ action: "mouse_click", button: "right" })}
+                          className="rounded-xl bg-white/15 px-2.5 py-1.5 text-xs font-semibold text-white"
+                        >
+                          Dir.
+                        </button>
+                        <button
+                          type="button"
+                          onClick={toggleDragLock}
+                          className={`rounded-xl px-2.5 py-1.5 text-xs font-semibold ${
+                            dragLocked ? "bg-sky-500 text-white" : "bg-white/15 text-white"
+                          }`}
+                        >
+                          {dragLocked ? "Soltar" : "Arrastar"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setFsPanel((p) => (p === "keyboard" ? "none" : "keyboard"))
+                          }
+                          className={`rounded-xl px-2.5 py-1.5 text-xs font-semibold ${
+                            fsPanel === "keyboard" ? "bg-sky-600 text-white" : "bg-white/15 text-white"
+                          }`}
+                        >
+                          Teclado
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setFsPanel((p) => (p === "shortcuts" ? "none" : "shortcuts"))
+                          }
+                          aria-label="Atalhos no espelho"
+                          className={`inline-flex items-center gap-1 rounded-xl px-2.5 py-1.5 text-xs font-semibold ${
+                            fsPanel === "shortcuts" ? "bg-sky-600 text-white" : "bg-white/15 text-white"
+                          }`}
+                        >
+                          <ShortcutsIcon className="h-3.5 w-3.5" />
+                          <span>Atalhos</span>
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => onSetRemoteInputEnabled(true)}
+                        className="rounded-xl bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white"
+                      >
+                        Ativar Mouse
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>,
+          document.body,
+        )
+      : null;
 
   return (
     <>
@@ -793,6 +1501,8 @@ export function ScreenMirrorCard({
                 );
               })}
             </div>
+
+            {renderZoomControls(false)}
           </div>
 
           <div className="flex items-center gap-1.5">
@@ -873,7 +1583,7 @@ export function ScreenMirrorCard({
               role="radio"
               aria-checked={interactionMode === "touch"}
               onClick={() => setInteractionMode("touch")}
-              className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-semibold whitespace-nowrap"
+              className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-semibold whitespace-nowrap"
               style={{
                 backgroundColor: interactionMode === "touch" ? "var(--surface)" : "transparent",
                 color: interactionMode === "touch" ? "var(--accent-text)" : "var(--text-secondary)",
@@ -881,14 +1591,29 @@ export function ScreenMirrorCard({
               }}
             >
               <HandTapIcon className="h-3.5 w-3.5" />
-              <span>Toque na tela</span>
+              <span>Toque</span>
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={interactionMode === "cursor"}
+              onClick={() => setInteractionMode("cursor")}
+              className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-semibold whitespace-nowrap"
+              style={{
+                backgroundColor: interactionMode === "cursor" ? "var(--surface)" : "transparent",
+                color: interactionMode === "cursor" ? "var(--accent-text)" : "var(--text-secondary)",
+                boxShadow: interactionMode === "cursor" ? "var(--shadow-pill)" : "none",
+              }}
+            >
+              <CursorIcon className="h-3.5 w-3.5" />
+              <span>Cursor</span>
             </button>
             <button
               type="button"
               role="radio"
               aria-checked={interactionMode === "view"}
               onClick={() => setInteractionMode("view")}
-              className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-semibold whitespace-nowrap"
+              className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-semibold whitespace-nowrap"
               style={{
                 backgroundColor: interactionMode === "view" ? "var(--surface)" : "transparent",
                 color: interactionMode === "view" ? "var(--accent-text)" : "var(--text-secondary)",
@@ -901,12 +1626,18 @@ export function ScreenMirrorCard({
           </div>
 
           <span className="text-[11px]" style={{ color: "var(--text-secondary)" }}>
-            Toque = clique · Segurar = botão direito
+            {interactionMode === "cursor"
+              ? "Arraste = cursor preciso · 2 dedos = dir./zoom"
+              : interactionMode === "view"
+                ? zoom > 1
+                  ? "Arraste para mover a imagem ampliada"
+                  : "Pinça com 2 dedos ou + para dar zoom"
+                : "Toque = clique · Segurar = botão direito"}
           </span>
         </div>
 
-        {/* Prompt to enable mouse/keyboard if touching is active while security lock is off */}
-        {interactionMode === "touch" && !remoteInputEnabled ? (
+        {/* Prompt to enable mouse/keyboard if touching/cursor is active while security lock is off */}
+        {interactionMode !== "view" && !remoteInputEnabled ? (
           <div
             className="mt-2.5 flex items-center justify-between gap-2 rounded-2xl border px-3 py-2 text-xs"
             style={{
@@ -915,7 +1646,7 @@ export function ScreenMirrorCard({
               color: "var(--text-secondary)",
             }}
           >
-            <span>Ative Mouse e Teclado para tocar direto na tela.</span>
+            <span>Ative Mouse e Teclado para controlar pela tela.</span>
             <button
               type="button"
               onClick={() => onSetRemoteInputEnabled(true)}
@@ -931,133 +1662,7 @@ export function ScreenMirrorCard({
         ) : null}
       </section>
 
-      {/* Fullscreen expanded modal */}
-      {expanded ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="Espelho da tela em tela cheia"
-          className="fixed inset-0 z-50 flex flex-col bg-black text-white"
-        >
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/15 bg-black/90 px-3 py-2">
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs font-semibold text-emerald-400">
-                {QUALITY_PRESETS[preset].label} · {QUALITY_PRESETS[preset].fps} fps
-              </span>
-              {monitors.length > 1
-                ? monitors.map((mon) => (
-                    <button
-                      key={mon.id}
-                      type="button"
-                      onClick={() => handleMonitorChange(mon.id)}
-                      className={`rounded-lg px-2 py-1 text-xs font-semibold ${
-                        activeMonitor === mon.id ? "bg-sky-600 text-white" : "bg-white/10 text-white/80"
-                      }`}
-                    >
-                      T{mon.id}
-                    </button>
-                  ))
-                : null}
-            </div>
-
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => setInteractionMode((m) => (m === "touch" ? "view" : "touch"))}
-                className="rounded-xl bg-white/15 px-2.5 py-1 text-xs font-semibold text-white"
-              >
-                {interactionMode === "touch" ? "Modo: Toque" : "Modo: Só ver"}
-              </button>
-              <button
-                type="button"
-                onClick={() => setExpanded(false)}
-                aria-label="Fechar tela cheia"
-                className="inline-flex items-center gap-1 rounded-xl bg-white/15 px-2.5 py-1 text-xs font-semibold text-white"
-              >
-                <CloseIcon className="h-3.5 w-3.5" />
-                <span>Fechar</span>
-              </button>
-            </div>
-          </div>
-
-          <div className="min-h-0 flex-1">{renderViewport(true)}</div>
-
-          {remoteInputEnabled ? (
-            <div className="flex flex-col gap-2 border-t border-white/15 bg-black/90 px-3 py-2">
-              <div className="flex flex-wrap items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => onSendInput({ action: "mouse_click", button: "right" })}
-                  className="rounded-xl bg-white/15 px-2.5 py-1.5 text-xs font-semibold text-white"
-                >
-                  Clique Dir.
-                </button>
-                <button
-                  type="button"
-                  onClick={toggleDragLock}
-                  className={`rounded-xl px-2.5 py-1.5 text-xs font-semibold ${
-                    dragLocked ? "bg-sky-500 text-white" : "bg-white/15 text-white"
-                  }`}
-                >
-                  {dragLocked ? "Soltar" : "Arrastar"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onSendInput({ action: "key_press", key: "escape" })}
-                  className="rounded-xl bg-white/15 px-2.5 py-1.5 text-xs font-semibold text-white"
-                >
-                  Esc
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onSendInput({ action: "key_press", key: "backspace" })}
-                  aria-label="Apagar no PC"
-                  className="rounded-xl bg-white/15 px-2.5 py-1.5 text-xs font-semibold text-white"
-                >
-                  <BackspaceIcon className="h-4 w-4" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onSendInput({ action: "key_press", key: "enter" })}
-                  aria-label="Enter no PC"
-                  className="rounded-xl bg-sky-600 px-2.5 py-1.5 text-xs font-semibold text-white"
-                >
-                  <EnterKeyIcon className="h-4 w-4" />
-                </button>
-              </div>
-
-              <form onSubmit={handleFsTextSubmit} className="flex gap-1.5">
-                <input
-                  type="text"
-                  value={fsText}
-                  onChange={(e) => setFsText(e.target.value)}
-                  placeholder="Digitar texto rápido…"
-                  aria-label="Texto rápido no espelho"
-                  className="min-h-[38px] min-w-0 flex-1 rounded-xl border border-white/20 bg-white/10 px-3 text-xs text-white placeholder:text-white/50"
-                />
-                <button
-                  type="submit"
-                  disabled={!fsText}
-                  className="rounded-xl bg-sky-600 px-3 text-xs font-semibold text-white disabled:opacity-40"
-                >
-                  Enviar
-                </button>
-              </form>
-            </div>
-          ) : (
-            <div className="flex items-center justify-between gap-2 border-t border-white/15 bg-black/90 px-3 py-2 text-xs text-white/80">
-              <span>Mouse e teclado desativados.</span>
-              <button
-                type="button"
-                onClick={() => onSetRemoteInputEnabled(true)}
-                className="rounded-xl bg-sky-600 px-3 py-1 font-semibold text-white"
-              >
-                Ativar
-              </button>
-            </div>
-          )}
-        </div>
-      ) : null}
+      {fullscreenModal}
     </>
   );
 }

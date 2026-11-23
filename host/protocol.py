@@ -18,6 +18,7 @@ from host.providers.base import (
     MediaStatus,
     MouseButton,
     PlaybackControls,
+    SystemAction,
 )
 
 YOUTUBE_VIDEO_ID_REGEX = re.compile(r"^[A-Za-z0-9_-]{11}$")
@@ -283,6 +284,7 @@ InputAction = Literal[
     "mouse_scroll",
     "key_text",
     "key_press",
+    "system_action",
 ]
 ModifierKey = Literal["ctrl", "alt", "shift", "win"]
 
@@ -303,6 +305,7 @@ class InputMessage(BaseModel):
     text: str | None = None
     key: str | None = None
     modifiers: list[ModifierKey] = Field(default_factory=list)
+    systemAction: SystemAction | None = None
     requestId: str | None = None
     clientSentAt: float | None = None
 
@@ -353,6 +356,11 @@ class InputMessage(BaseModel):
                 raise ValueError("O evento 'key_text' não aceita bytes nulos.")
             if len(self.text) > 500:
                 raise ValueError("O evento 'key_text' aceita no máximo 500 caracteres.")
+            return self
+
+        if self.action == "system_action":
+            if self.systemAction is None:
+                raise ValueError("O evento 'system_action' exige 'systemAction' válido.")
             return self
 
         # key_press

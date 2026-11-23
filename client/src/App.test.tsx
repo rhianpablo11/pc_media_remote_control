@@ -964,6 +964,38 @@ describe("App PWA", () => {
         1080,
       ),
     ).toEqual({ x: 1, y: 1 });
+
+    // 90° clockwise rotated landscape mode on portrait viewport (180x320 exact rotated 16:9 fit)
+    expect(
+      mapClientPointToNormalized(
+        180,
+        0,
+        { left: 0, top: 0, width: 180, height: 320 },
+        1920,
+        1080,
+        90,
+      ),
+    ).toEqual({ x: 0, y: 0 });
+    expect(
+      mapClientPointToNormalized(
+        0,
+        320,
+        { left: 0, top: 0, width: 180, height: 320 },
+        1920,
+        1080,
+        90,
+      ),
+    ).toEqual({ x: 1, y: 1 });
+    expect(
+      mapClientPointToNormalized(
+        90,
+        160,
+        { left: 0, top: 0, width: 180, height: 320 },
+        1920,
+        1080,
+        90,
+      ),
+    ).toEqual({ x: 0.5, y: 0.5 });
   });
 
   it("keeps screen mirror off by default, streams frames on demand, and supports direct tap alongside touchpad", () => {
@@ -1079,11 +1111,33 @@ describe("App PWA", () => {
         double: false,
       });
 
-      // Open and close fullscreen modal
+      // Zoom controls on inline card
+      fireEvent.click(screen.getByRole("button", { name: "Aumentar zoom do espelho" }));
+      expect(screen.getByRole("button", { name: "Resetar zoom do espelho" })).toHaveTextContent("1.5x");
+      fireEvent.click(screen.getByRole("button", { name: "Resetar zoom do espelho" }));
+      expect(screen.getByRole("button", { name: "Resetar zoom do espelho" })).toHaveTextContent("1.0x");
+
+      // Switch mirror to precision Cursor mode and drag -> mouse_move
+      fireEvent.click(screen.getByRole("radio", { name: "Cursor" }));
+      fireEvent.touchStart(stage, { touches: [{ clientX: 50, clientY: 50 }] });
+      fireEvent.touchMove(stage, { touches: [{ clientX: 70, clientY: 58 }] });
+      fireEvent.touchEnd(stage, { touches: [], changedTouches: [{ clientX: 70, clientY: 58 }] });
+      const cursorMove = ws.sent.map((s) => JSON.parse(s)).find((m) => m.action === "mouse_move");
+      expect(cursorMove).toMatchObject({ v: 1, type: "input", action: "mouse_move" });
+
+      // Open portal fullscreen modal on document.body, rotate 90°, toggle HUD, and close
       fireEvent.click(screen.getByRole("button", { name: "Expandir espelho da tela" }));
-      expect(
-        screen.getByRole("dialog", { name: "Espelho da tela em tela cheia" }),
-      ).toBeInTheDocument();
+      const dialog = screen.getByRole("dialog", { name: "Espelho da tela em tela cheia" });
+      expect(dialog.parentElement).toBe(document.body);
+
+      const rotateBtn = screen.getByRole("button", { name: "Girar tela deitada" });
+      fireEvent.click(rotateBtn);
+      expect(rotateBtn).toHaveAttribute("aria-pressed", "true");
+
+      fireEvent.click(screen.getByRole("button", { name: "Ocultar controles" }));
+      expect(screen.getByRole("button", { name: "Mostrar controles do espelho" })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Mostrar controles do espelho" }));
+
       fireEvent.click(screen.getByRole("button", { name: "Fechar tela cheia" }));
       expect(
         screen.queryByRole("dialog", { name: "Espelho da tela em tela cheia" }),
@@ -1097,5 +1151,75 @@ describe("App PWA", () => {
       URL.createObjectURL = origCreateObjectURL;
       URL.revokeObjectURL = origRevokeObjectURL;
     }
+  });
+
+  it("supports precision mouse actions and categorized Windows shortcuts with 2-tap PC lock", () => {
+    localStorage.clear();
+    render(<App />);
+    const ws = MockWebSocket.instances[0];
+    act(() => {
+      ws.simulateOpen();
+      ws.simulateMessage(makeSampleState({ remoteInputEnabled: true }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Controle" }));
+
+    // Precision mouse row: Duplo Clique, Clique Meio, Rolagem Invertida
+    fireEvent.click(screen.getByRole("button", { name: "Duplo Clique" }));
+    expect(JSON.parse(ws.sent.at(-1)!)).toMatchObject({
+      type: "input",
+      action: "mouse_click",
+      button: "left",
+      double: true,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Clique Meio" }));
+    expect(JSON.parse(ws.sent.at(-1)!)).toMatchObject({
+      type: "input",
+      action: "mouse_click",
+      button: "middle",
+    });
+
+    const scrollToggle = screen.getByRole("button", { name: "Rolagem: Normal" });
+    fireEvent.click(scrollToggle);
+    expect(screen.getByRole("button", { name: "Rolagem: Invertida" })).toBeInTheDocument();
+
+    // System Windows shortcuts
+    fireEvent.click(screen.getByRole("button", { name: "Dispositivos" }));
+    expect(JSON.parse(ws.sent.at(-1)!)).toMatchObject({
+      v: 1,
+      type: "input",
+      action: "system_action",
+      systemAction: "open_devices",
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Projetar (TV)" }));
+    expect(JSON.parse(ws.sent.at(-1)!)).toMatchObject({
+      type: "input",
+      action: "key_press",
+      key: "p",
+      modifiers: ["win"],
+    });
+
+    // Lock PC requires 2-tap confirmation
+    const sentBeforeLock = ws.sent.length;
+    fireEvent.click(screen.getByRole("button", { name: "Bloquear PC" }));
+    expect(ws.sent.length).toBe(sentBeforeLock);
+    fireEvent.click(screen.getByRole("button", { name: "Confirmar Bloqueio?" }));
+    expect(JSON.parse(ws.sent.at(-1)!)).toMatchObject({
+      type: "input",
+      action: "system_action",
+      systemAction: "lock_screen",
+    });
+
+    // Windows category tab
+    fireEvent.click(screen.getByRole("tab", { name: "Janelas" }));
+    fireEvent.click(screen.getByRole("button", { name: "Área Trab." }));
+    expect(JSON.parse(ws.sent.at(-1)!)).toMatchObject({
+      type: "input",
+      action: "key_press",
+      key: "d",
+      modifiers: ["win"],
+    });
   });
 });

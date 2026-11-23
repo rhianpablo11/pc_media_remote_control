@@ -28,6 +28,13 @@ MediaAction = Literal[
     "fullscreen",
 ]
 MouseButton = Literal["left", "right", "middle"]
+SystemAction = Literal[
+    "lock_screen",
+    "open_devices",
+    "open_display",
+    "open_sound",
+    "open_network",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,4 +194,8 @@ class RemoteInputProvider(Protocol):
 
     async def press_key(self, key: str, modifiers: list[str] | None = None) -> bool:
         """Press an allowed special/shortcut key with optional modifiers."""
+        ...
+
+    async def execute_system_action(self, action: SystemAction) -> bool:
+        """Execute an allowlisted Windows OS action (lock screen or Settings panel)."""
         ...

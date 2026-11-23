@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
+import os
 from collections.abc import Sequence
 from ctypes import wintypes
 from typing import Any, Literal
+
+from host.providers.base import SystemAction
 
 MouseButton = Literal["left", "right", "middle"]
 
@@ -113,9 +116,20 @@ ALLOWED_REMOTE_KEYS: dict[str, tuple[int, bool]] = {
     "page_up": (0x21, True),
     "page_down": (0x22, True),
     "f": (0x46, False),
-    "f5": (0x74, False),
-    "f11": (0x7A, False),
+    "print_screen": (0x2C, True),
     "win": (0x5B, True),
+}
+
+# Populate function keys f1..f12
+for _fn_idx in range(1, 13):
+    ALLOWED_REMOTE_KEYS[f"f{_fn_idx}"] = (0x70 + (_fn_idx - 1), False)
+
+# Allowlisted Windows ms-settings URIs (no user-controlled paths or shell commands)
+SYSTEM_ACTION_URIS: dict[str, str] = {
+    "open_devices": "ms-settings:bluetooth",
+    "open_display": "ms-settings:display",
+    "open_sound": "ms-settings:sound",
+    "open_network": "ms-settings:network",
 }
 
 # Populate alphanumeric keys for shortcut combinations (e.g. ctrl+c, ctrl+v, ctrl+t, alt+...)
@@ -392,6 +406,27 @@ def send_unicode_text(text: str) -> bool:
     return _send_inputs(inputs)
 
 
+def execute_windows_system_action(action: SystemAction) -> bool:
+    """Execute an allowlisted Windows OS action safely without shell interpolation."""
+    if action == "lock_screen":
+        u32 = _get_user32()
+        if u32 is None or not hasattr(u32, "LockWorkStation"):
+            return False
+        try:
+            return bool(u32.LockWorkStation())
+        except Exception:
+            return False
+
+    uri = SYSTEM_ACTION_URIS.get(action)
+    if not uri or not hasattr(os, "startfile"):
+        return False
+    try:
+        os.startfile(uri)
+        return True
+    except Exception:
+        return False
+
+
 class WindowsInputProvider:
     """Async RemoteInputProvider implementation backed by Win32 SendInput."""
 
@@ -442,3 +477,6 @@ class WindowsInputProvider:
             return False
         vk, extended = entry
         return await asyncio.to_thread(send_vk_press, vk, extended, modifiers)
+
+    async def execute_system_action(self, action: SystemAction) -> bool:
+        return await asyncio.to_thread(execute_windows_system_action, action)

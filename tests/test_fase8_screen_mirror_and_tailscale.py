@@ -22,7 +22,11 @@ from host.config import (
     HostSettings,
     sanitize_hostname,
 )
-from host.input_control import compute_virtual_desktop_abs_coords
+from host.input_control import (
+    ALLOWED_REMOTE_KEYS,
+    compute_virtual_desktop_abs_coords,
+    execute_windows_system_action,
+)
 from host.network import (
     LanInterface,
     detect_tailscale_info,
@@ -134,6 +138,10 @@ class FakeInputProvider:
 
     async def press_key(self, key: str, modifiers: list[str] | None = None) -> bool:
         self.calls.append(("press_key", key, list(modifiers or [])))
+        return True
+
+    async def execute_system_action(self, action: str) -> bool:
+        self.calls.append(("system_action", action))
         return True
 
 
@@ -652,3 +660,96 @@ def test_tailscale_config_persistence_tray_and_doctor(tmp_path: Path) -> None:
         assert run_doctor(port=8765) == 0
         lines = [str(c.args[0]) for c in mock_print.call_args_list if c.args]
         assert any("Tailscale detectado (opcional)" in line for line in lines)
+
+
+@pytest.mark.anyio
+async def test_system_action_protocol_security_gate_and_windows_execution(tmp_path: Path) -> None:
+    for action_name in (
+        "lock_screen",
+        "open_devices",
+        "open_display",
+        "open_sound",
+        "open_network",
+    ):
+        msg = parse_client_message(
+            {"v": 1, "type": "input", "action": "system_action", "systemAction": action_name}
+        )
+        assert isinstance(msg, InputMessage)
+        assert msg.systemAction == action_name
+
+    for bad_payload in (
+        {"v": 1, "type": "input", "action": "system_action"},
+        {"v": 1, "type": "input", "action": "system_action", "systemAction": "shutdown"},
+        {
+            "v": 1,
+            "type": "input",
+            "action": "key_press",
+            "key": "delete",
+            "modifiers": ["ctrl", "alt"],
+        },
+    ):
+        with pytest.raises(ValidationError):
+            parse_client_message(bad_payload)
+
+    # Extended F-keys & shortcuts allowed cleanly
+    for fn_num in range(1, 13):
+        assert f"f{fn_num}" in ALLOWED_REMOTE_KEYS
+    assert "print_screen" in ALLOWED_REMOTE_KEYS
+    for combo in (
+        {"v": 1, "type": "input", "action": "key_press", "key": "f4", "modifiers": ["alt"]},
+        {"v": 1, "type": "input", "action": "key_press", "key": "d", "modifiers": ["win"]},
+        {"v": 1, "type": "input", "action": "key_press", "key": "p", "modifiers": ["win"]},
+        {
+            "v": 1,
+            "type": "input",
+            "action": "key_press",
+            "key": "escape",
+            "modifiers": ["ctrl", "shift"],
+        },
+    ):
+        parsed = parse_client_message(combo)
+        assert isinstance(parsed, InputMessage)
+
+    # Gate respects remote_input_enabled=False
+    store = HostConfigStore(path=tmp_path / "settings.json")
+    fake_input = FakeInputProvider()
+    coord = HostStateCoordinator(
+        providers=[MinimalSessionProvider()],
+        audio_provider=MinimalAudioProvider(),
+        input_provider=fake_input,
+        remote_input_enabled=store.get_remote_input_enabled(),
+        on_remote_input_change=store.set_remote_input_enabled,
+    )
+    blocked = await coord.handle_raw_client_message(
+        {"v": 1, "type": "input", "action": "system_action", "systemAction": "open_devices"}
+    )
+    assert isinstance(blocked, ErrorMessage)
+    assert blocked.code == "remote_input_disabled"
+    assert fake_input.calls == []
+
+    coord.set_remote_input_enabled(True)
+    ok_res = await coord.handle_raw_client_message(
+        {
+            "v": 1,
+            "type": "input",
+            "action": "system_action",
+            "systemAction": "lock_screen",
+            "requestId": "sys-1",
+        }
+    )
+    assert ok_res is not None
+    assert ("system_action", "lock_screen") in fake_input.calls
+
+    # Windows execution uses LockWorkStation + allowlisted ms-settings URIs
+    mock_u32 = MagicMock()
+    mock_u32.LockWorkStation.return_value = 1
+    with patch("host.input_control._get_user32", return_value=mock_u32):
+        assert execute_windows_system_action("lock_screen") is True
+    mock_u32.LockWorkStation.assert_called_once()
+
+    with patch("os.startfile", create=True) as mock_start:
+        assert execute_windows_system_action("open_devices") is True
+        mock_start.assert_called_with("ms-settings:bluetooth")
+        assert execute_windows_system_action("open_sound") is True
+        mock_start.assert_called_with("ms-settings:sound")
+

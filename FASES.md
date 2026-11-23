@@ -91,5 +91,11 @@ Objetivo: descobrir o que o Windows realmente nos entrega, antes de construir qu
 - [x] Toque direto na imagem espelhada (`mouse_move_abs` multi-monitor via Win32 Virtual Desktop `0..65535`, clique, duplo toque, segurar para clique direito, rolagem com 2 dedos e modo tela cheia `Expandir`) mantendo touchpad e teclado separados intactos
 - [x] Suporte opcional e desligado por padrão a Tailscale (`--tailscale`, toggle na bandeja do Windows e seção dedicada em `/pair`) mantendo escolha automática do IP da LAN física e endurecendo a checagem contra proxy (`tailscale serve`) para nunca tratar proxy em loopback como máquina local
 
+## Fase 8.1 — Polimento do Espelho (Zoom, Paisagem/Tela Cheia Real), Mouse de Precisão e Atalhos do Windows
+- [x] Zoom (`1.0x`–`3.5x` por botões e gesto de pinça) + pan em imagem ampliada no card e no modal de tela cheia
+- [x] Tela cheia 100% real via `createPortal(document.body)` + correção do `transform` residual no `.view-enter`, suporte à Fullscreen API, modo paisagem 90° (`Girar`) com mapeamento rotacionado de toque/cursor e barra HUD flutuante ocultável
+- [x] Modo **`Cursor`** de precisão sobre o espelho, sensibilidade de `0.6x` a `3.0x`, botões **Duplo Clique** / **Clique Meio** e alternância persistida de **Rolagem Invertida (Natural)**
+- [x] Atalhos categorizados do Windows (`Sistema`, `Janelas`, `Edição`), incluindo teclas `F1`–`F12`/`PrintScreen` e ações `system_action` em allowlist (`LockWorkStation` com confirmação em 2 toques + abertura de painéis `ms-settings:bluetooth`/`sound`/`display`/`network`)
+
 ## Futuro
 - Streaming de vídeo/áudio completo (WebRTC/DXGI de baixa latência), Linux (MPRIS), macOS, cliente iOS testado, app nativo, múltiplos notebooks.
