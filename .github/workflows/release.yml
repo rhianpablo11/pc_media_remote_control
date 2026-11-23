@@ -6,8 +6,19 @@ on:
       - "v*"
   workflow_dispatch:
     inputs:
+      bump:
+        description: "Incremento automático de versão (cria v1.0.0 se ainda não houver tags) ou opção manual"
+        required: true
+        type: choice
+        default: "patch"
+        options:
+          - patch
+          - minor
+          - major
+          - custom
+          - artifact-only
       tag:
-        description: "Tag da release (ex.: v1.0.0). Deixe vazio para apenas gerar artefato de teste sem publicar Release."
+        description: "Tag manual (ex.: v1.0.0). Usada apenas quando bump=custom."
         required: false
         type: string
         default: ""
@@ -25,6 +36,64 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Resolve release tag
+        id: release_tag
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          BUMP: ${{ inputs.bump }}
+          CUSTOM_TAG: ${{ inputs.tag }}
+        run: |
+          $tag = ""
+          $publish = "false"
+
+          if ($env:EVENT_NAME -eq "push") {
+            $tag = $env:REF_NAME.Trim()
+            $publish = "true"
+          } elseif ($env:BUMP -eq "artifact-only") {
+            $tag = ""
+            $publish = "false"
+          } elseif ($env:BUMP -eq "custom") {
+            $candidate = if ($null -ne $env:CUSTOM_TAG) { $env:CUSTOM_TAG.Trim() } else { "" }
+            if ($candidate -notmatch '^v\d+\.\d+\.\d+([-.][0-9A-Za-z.]+)?$') {
+              throw "Tag manual inválida: '$candidate'. Use o formato vX.Y.Z (ex.: v1.0.0)."
+            }
+            $tag = $candidate
+            $publish = "true"
+          } else {
+            $rawTags = @(git tag -l "v*")
+            $versions = foreach ($t in $rawTags) {
+              $trimmed = $t.Trim()
+              if ($trimmed -match '^v(\d+)\.(\d+)\.(\d+)$') {
+                [PSCustomObject]@{
+                  Major = [int]$matches[1]
+                  Minor = [int]$matches[2]
+                  Patch = [int]$matches[3]
+                }
+              }
+            }
+            if (-not $versions) {
+              $tag = "v1.0.0"
+            } else {
+              $top = $versions | Sort-Object Major, Minor, Patch -Descending | Select-Object -First 1
+              switch ($env:BUMP) {
+                "major" { $tag = "v$($top.Major + 1).0.0" }
+                "minor" { $tag = "v$($top.Major).$($top.Minor + 1).0" }
+                default { $tag = "v$($top.Major).$($top.Minor).$($top.Patch + 1)" }
+              }
+            }
+            $publish = "true"
+          }
+
+          $prerelease = if ($tag -and ($tag -match '-')) { "true" } else { "false" }
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "publish=$publish" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "prerelease=$prerelease" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Host "Resolved release tag='$tag', publish='$publish', prerelease='$prerelease'"
 
       - name: Set up Python 3.13
         uses: actions/setup-python@v5
@@ -93,13 +162,14 @@ jobs:
           retention-days: 14
 
       - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
+        if: steps.release_tag.outputs.publish == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-          name: PC Media Control ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          tag_name: ${{ steps.release_tag.outputs.tag }}
+          name: PC Media Control ${{ steps.release_tag.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           generate_release_notes: true
-          prerelease: ${{ contains(github.ref_name, '-') || contains(inputs.tag, '-') }}
+          prerelease: ${{ steps.release_tag.outputs.prerelease == 'true' }}
           body: |
             ## PC Media Control (Windows x64)
 

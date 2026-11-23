@@ -206,8 +206,8 @@ Em redes corporativas, públicas ou universitárias, o roteador pode bloquear co
 ### Preparar ambiente local
 
 ```powershell
-git clone https://github.com/<SEU-USUARIO>/pc_media_control.git
-cd pc_media_control
+git clone https://github.com/rhianpablo11/pc_media_remote_control.git
+cd pc_media_remote_control
 
 # Ambiente Python
 python -m venv .venv
@@ -218,8 +218,6 @@ python -m venv .venv
 npm --prefix client ci
 npm --prefix client run build
 ```
-
-*(Substitua `<SEU-USUARIO>` pelo usuário ou organização do seu repositório no GitHub.)*
 
 ### Executar em modo desenvolvimento
 
@@ -267,9 +265,12 @@ O repositório conta com dois workflows em `.github/workflows/` rodando em `wind
 
 - **[`.github/workflows/ci.yml`](.github/workflows/ci.yml):** roda automaticamente em todo `push` e `pull_request` para a branch `main`, validando `ruff`, `pytest`, testes Node da extensão e lint/test/build do cliente PWA.
 - **[`.github/workflows/release.yml`](.github/workflows/release.yml):** roda todo o pacote de testes, executa `scripts/build_exe.py`, empacota `PCMediaControl.exe`, `PCMediaControl-extension.zip`, `PCMediaControl-firewall-helper.zip` e `SHA256SUMS.txt` e publica uma **GitHub Release** com os anexos prontos para download.
-  - **Publicação automática por tag:** crie e envie uma tag começando com `v`:
+  - **Execução em 1 clique no GitHub (SemVer automático):** na aba **Actions** → **Release Windows Executable** → **Run workflow**, escolha o tipo de incremento em **`bump`**:
+    - `patch` *(padrão)*, `minor` ou `major` — cria automaticamente a próxima tag `vX.Y.Z` (iniciando em `v1.0.0` se ainda não houver tags) e publica a **GitHub Release** correspondente;
+    - `custom` — usa a tag informada no campo `tag` (ex.: `v1.2.0-beta.1`);
+    - `artifact-only` — gera e disponibiliza o artefato de teste (`pc-media-control-windows-x64`) por 14 dias sem publicar Release.
+  - **Publicação direta por tag Git:** também é possível disparar criando e enviando uma tag começando com `v`:
     ```powershell
     git tag v1.0.0
     git push origin v1.0.0
     ```
-  - **Execução manual (`workflow_dispatch`):** na aba **Actions** → **Release Windows Executable** → **Run workflow**, informe uma tag (ex.: `v1.0.0`) para publicar a release ou deixe o campo em branco para apenas gerar e baixar o artefato de teste (`pc-media-control-windows-x64`).
